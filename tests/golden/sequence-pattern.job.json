@@ -1,0 +1,101 @@
+{
+  "inputs": [
+    {
+      "path": "in.mp4",
+      "streams": [],
+      "input_args": [],
+      "concat_paths": [],
+      "decoder_v": "",
+      "decoder_a": "",
+      "decoder_s": ""
+    }
+  ],
+  "outputs": [
+    {
+      "path": "frame_%03d.png",
+      "container": null,
+      "video_codec": null,
+      "audio_codec": null,
+      "subtitle_codec": null,
+      "mappings": [],
+      "video_options": {},
+      "audio_options": {},
+      "options": {},
+      "start": null,
+      "duration": null,
+      "end": null,
+      "update_one": false,
+      "metadata": {},
+      "dispositions": {},
+      "bsf": {},
+      "component_options": {},
+      "attachments": [],
+      "cover_art": null,
+      "chapters": [],
+      "segment_enabled": false,
+      "segment_time": null,
+      "segment_list": null,
+      "segment_list_type": null,
+      "segment_format": null,
+      "segment_wrap": null,
+      "segment_reset_timestamps": false,
+      "segment_clocktime": false,
+      "segment_break_non_keyframes": false,
+      "tee_spec": "",
+      "stream_metadata": {},
+      "subtitle_burn_in": "",
+      "sn_explicit": false,
+      "video_filters": {
+        "filters": []
+      },
+      "audio_filters": {
+        "filters": []
+      }
+    }
+  ],
+  "video_filters": {
+    "filters": []
+  },
+  "audio_filters": {
+    "filters": []
+  },
+  "loglevel": null,
+  "stats": false,
+  "stats_period": null,
+  "stats_mode": null,
+  "report": false,
+  "two_pass": false,
+  "noconfirm": false,
+  "xerror": false,
+  "max_error_rate": null,
+  "copyts": false,
+  "start_at_zero": false,
+  "ignore_unknown": false,
+  "copy_unknown": false,
+  "benchmark": false,
+  "benchmark_all": false,
+  "cpuflags": null,
+  "print_graphs": false,
+  "max_alloc": null,
+  "recast_media": false,
+  "abort_on": null,
+  "filter_threads": null,
+  "filter_complex_threads": null,
+  "filter_buffered_frames": null,
+  "frame_drop_threshold": null,
+  "timelimit": null,
+  "dump": false,
+  "hex": false,
+  "stdin": false,
+  "print_graphs_file": null,
+  "print_graphs_format": null,
+  "vstats": false,
+  "vstats_file": null,
+  "vstats_version": null,
+  "hw_devices": [],
+  "filter_hw_device": null,
+  "vaapi_device": null,
+  "qsv_device": null,
+  "progress": null,
+  "hide_banner": true
+}

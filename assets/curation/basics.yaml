@@ -1,0 +1,10 @@
+# Friendly labels for high-traffic Expert options (overlay only — never removes rows).
+"encoder:libx264:crf":
+  label: Quality (CRF)
+  group: Rate control
+"encoder:libx264:preset":
+  label: Speed preset
+  group: Rate control
+"muxer:matroska:attachment":
+  label: Attachments
+  group: Container

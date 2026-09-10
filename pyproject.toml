@@ -1,0 +1,48 @@
+[project]
+name = "ffgui"
+version = "0.1.0"
+license = "Apache-2.0"
+description = "A native GUI command-constructor for FFmpeg that exports runnable .bat/.sh scripts."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fftui @ git+https://github.com/RoyCoding8/FFmpeg-TUI.git@9a0a916bf29d6dc62c2606f41edf064feb897ebf",
+    "pyside6>=6.8",
+    "pyyaml>=6.0.3",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.19,<0.12.0"]
+build-backend = "uv_build"
+
+[project.scripts]
+ffgui = "ffgui.app:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "F",
+    "UP",
+    "SIM",
+    "C4",
+    "RUF005",
+    "RUF008",
+    "RUF009",
+    "RUF010",
+    "RUF015",
+    "RUF016",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=7.1.0",
+    "pyyaml>=6.0.3",
+    "ruff>=0.16.2",
+]

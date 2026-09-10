@@ -1,0 +1,60 @@
+# CI for a future GitHub push: lint + full test suite on all four targets.
+# One matrix, not four copied files: the steps are identical except the OS
+# image and the ffmpeg install. Qt runs headless via QT_QPA_PLATFORM.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, label: ubuntu }
+          - { os: ubuntu-24.04-arm, label: ubuntu-arm }
+          - { os: macos-14, label: macos }
+          - { os: windows-2022, label: windows }
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system packages (Ubuntu)
+        if: startsWith(matrix.os, 'ubuntu')
+        run: >
+          sudo apt-get update && sudo apt-get install -y ffmpeg
+          libegl1 libgl1 libxkbcommon0 libdbus-1-3 libfontconfig1
+
+      - name: Install ffmpeg (macOS)
+        if: startsWith(matrix.os, 'macos')
+        run: brew install ffmpeg
+
+      - name: Install ffmpeg (Windows)
+        if: startsWith(matrix.os, 'windows')
+        run: choco install ffmpeg -y
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --frozen --group dev
+
+      - name: Lint
+        run: uv run ruff check src tests
+
+      # One process for the whole suite: per-test widget teardown keeps the
+      # session heap flat, so theme tests run inline (splitting them would
+      # hide cross-test pollution). faulthandler turns any future stall
+      # into a stack dump, not a 6h burn.
+      - name: Test
+        run: uv run pytest tests/ -q -p faulthandler -o faulthandler_timeout=240
