@@ -8,4 +8,6 @@ __pycache__/
 dist/
 build/nuitka-build/
 *.egg-info/
-.claude
+.claude.worktrees/
+queue.json
+queue.json.lock

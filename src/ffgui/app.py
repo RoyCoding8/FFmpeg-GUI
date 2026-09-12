@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import sys
+from pathlib import Path
 
 from PySide6.QtCore import QSettings, QThread, QTimer, Signal
 from PySide6.QtWidgets import QApplication
@@ -70,41 +71,36 @@ def _launch_probe(shell: Shell, on_done, on_failed) -> _Probe:
 
 def _boot(app: QApplication, shell: Shell, settings: QSettings, cap,
           job_files: list[str] | None = None) -> Controller:
-    doc = QueueDocument(cap)
+    doc = QueueDocument.load(cap)
     controller = Controller(shell, doc, cap, settings)
     shell.set_state("workspace")
+    app.aboutToQuit.connect(
+        lambda: (_save_state(settings, shell), doc.save()))
     for path in job_files or []:
         controller.open_job_file(path)
     return controller
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = [sys.argv[0], *(argv if argv is not None else sys.argv[1:])]
-    smoke = "--smoke" in args[1:]
-    job_files = [a for a in args[1:] if a.endswith(".ffgui")]
-    app = QApplication.instance() or QApplication(args)
-    settings = QSettings(_ORG, _ORG)
-    apply_theme(app, coerce_mode(settings.value("theme", "system")))
-    shell = Shell()
-    _restore_state(settings, shell)
-    app.aboutToQuit.connect(lambda: _save_state(settings, shell))
-    shell.show()
-    if smoke:
-        _boot(app, shell, settings, CapabilityIndex.stub(), job_files)
-        QTimer.singleShot(0, app.quit)
-        return app.exec()
-
-    explicit, found = locate_ffmpeg(settings)
-
-    def start_probe() -> None:
-        shell.set_state("loading")
-        _launch_probe(shell,
-                      lambda cap: _boot(app, shell, settings, cap, job_files),
-                      _probe_failed)
+def _wire_probe(app: QApplication, shell: Shell, settings: QSettings,
+                job_files: list[str]) -> None:
+    cancelled: list[bool] = []
 
     def _probe_failed(message: str) -> None:
         shell.set_state("no-ffmpeg")
         shell.no_ffmpeg.status.setText(message)
+
+    def _cancel() -> None:
+        cancelled.append(True)
+        _probe_failed("probe cancelled")
+
+    def start_probe() -> None:
+        cancelled.clear()
+        shell.set_state("loading")
+        _launch_probe(
+            shell,
+            lambda cap: None if cancelled
+            else _boot(app, shell, settings, cap, job_files),
+            lambda message: None if cancelled else _probe_failed(message))
 
     def locate(path: str) -> None:
         if not path:
@@ -128,6 +124,8 @@ def main(argv: list[str] | None = None) -> int:
         else:
             _probe_failed("ffmpeg still not found — rescan, browse, or paste a path")
 
+    shell.loading.cancelled.connect(_cancel)
+    explicit, found = locate_ffmpeg(settings)
     if found:
         aim_ffmpeg(explicit)
         start_probe()
@@ -136,6 +134,24 @@ def main(argv: list[str] | None = None) -> int:
         shell.no_ffmpeg.rescan.clicked.connect(rescan)
         shell.no_ffmpeg.browse.clicked.connect(browse)
         shell.no_ffmpeg.accepted.connect(locate)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = [sys.argv[0], *(argv if argv is not None else sys.argv[1:])]
+    smoke = "--smoke" in args[1:]
+    job_files = [a for a in args[1:] if Path(a).suffix.lower() == ".ffgui"]
+    app = QApplication.instance() or QApplication(args)
+    settings = QSettings(_ORG, _ORG)
+    apply_theme(app, coerce_mode(settings.value("theme", "system")))
+    shell = Shell()
+    _restore_state(settings, shell)
+    shell.show()
+    if smoke:
+        _boot(app, shell, settings, CapabilityIndex.stub(), job_files)
+        QTimer.singleShot(0, app.quit)
+        return app.exec()
+
+    _wire_probe(app, shell, settings, job_files)
     code = app.exec()
     return 0 if smoke else code
 

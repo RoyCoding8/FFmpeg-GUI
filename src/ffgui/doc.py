@@ -197,8 +197,12 @@ class QueueDocument(QObject):
         return inputs[0] if inputs else None
 
     def touch(self, row: int) -> None:
-        """Mark a row edited (clears parked unparsed state)."""
-        self.item(row).unparsed = None
+        """Mark a row edited: drops the parked unparsed payload and the stale
+        parking error, so the edited row saves as a job, not as parked state."""
+        it = self.item(row)
+        if it.unparsed is not None:
+            it.error = None
+        it.unparsed = None
         self.itemChanged.emit(row)
 
     def __len__(self) -> int:
@@ -206,8 +210,9 @@ class QueueDocument(QObject):
 
 
     def _codec_warning(self, out: Output, stream: str, codec: str) -> str | None:
-        """Warning-only compat gate: subtitle codecs and unknown muxers can't be judged."""
-        if stream == "subtitle" or self.cap.entry("encoder", codec):
+        """Warning-only compat gate: stream-copy and subtitle codecs, and
+        unknown muxers, can't be judged."""
+        if stream == "subtitle" or codec == "copy" or self.cap.entry("encoder", codec):
             return None
         container = out.container or Path(out.path or "").suffix.lstrip(".")
         if not container or self.cap.entry("muxer", container) is None:
@@ -279,9 +284,10 @@ class QueueDocument(QObject):
 
     def set_output_field(self, row: int, key: str, value: str) -> str | None:
         """Basic per-item output edits: path, container, cover art, trim range,
-        segment time. Also the single validated home of the segment_time slot."""
+        segment time, subtitle burn-in. Also the single validated home of the
+        segment_time slot."""
         if key not in ("path", "container", "cover_art", "start", "duration",
-                       "end", "segment_time"):
+                       "end", "segment_time", "subtitle_burn_in"):
             return f"unknown output field {key!r}"
         value = _s(value)
         if _field_hostile(value):
@@ -363,8 +369,9 @@ class QueueDocument(QObject):
         out = self._out(row)
         if out is None:
             return "row has no output yet"
-        out.video_options.pop("movflags", None)
+        legacy = out.video_options.pop("movflags", None)
         flags = {f for f in (out.options.get("movflags") or "").split("+") if f}
+        flags.update(f for f in (legacy or "").split("+") if f)
         (flags.add if is_truthy(value) else flags.discard)("faststart")
         merged = "".join(f"+{f}" for f in sorted(flags))
         if merged:
@@ -376,13 +383,15 @@ class QueueDocument(QObject):
 
     def set_segment_enabled(self, row: int, value: str) -> str | None:
         """Toggle the segment mover; enabling without a container falls back
-        to the output container, defaulting to mp4."""
+        to the output file's extension, defaulting to mp4."""
         out = self._out(row)
         if out is None:
             return "row has no output yet"
         out.segment_enabled = is_truthy(value)
         if out.segment_enabled:
-            out.segment_format = out.container or "mp4"
+            out.segment_format = (out.container
+                                  or Path(out.path).suffix.lstrip(".").lower()
+                                  or "mp4")
         self.touch(row)
         return None
 
@@ -399,8 +408,11 @@ class QueueDocument(QObject):
                 return f"filter {expr!r} must not contain quotes or newlines"
         if self._out(row) is None:
             return "row has no output yet"
-        setattr(self.item(row).job, stream,
+        job = self.item(row).job
+        setattr(job, stream,
                 FilterChain(filters=list(exprs)) if exprs else FilterChain())
+        for out in job.outputs:
+            setattr(out, stream, FilterChain())
         self.touch(row)
         return None
 
@@ -546,7 +558,8 @@ class QueueDocument(QObject):
         return None
 
     def set_bsf(self, row: int, value: str) -> str | None:
-        """Replace the -bsf map from 'spec=filter' text; empty text clears it."""
+        """Replace the -bsf map from 'spec=filter' text; a bare filter applies
+        to the first video stream; empty text clears it."""
         value = _s(value)
         if _field_hostile(value):
             return "bsf must not contain quotes or newlines"
@@ -554,9 +567,11 @@ class QueueDocument(QObject):
         if out is None:
             return "row has no output yet"
         out.bsf.clear()
-        spec, _, flt = value.partition("=")
-        if flt:
+        spec, sep, flt = value.partition("=")
+        if sep:
             out.bsf[spec or "v:0"] = flt
+        elif value:
+            out.bsf["v:0"] = value
         self.touch(row)
         return None
 
@@ -580,15 +595,26 @@ class QueueDocument(QObject):
 
 
     def save(self, dir=None) -> None:
-        save_queue([(it.unparsed, it.meta) if it.unparsed is not None
-                    else (it.job, it.meta) for it in self.items], dir)
+        rows = []
+        for it in self.items:
+            if it.unparsed is not None:
+                rows.append((it.unparsed, it.meta))
+            elif it.error is not None:
+                # "outputs" must stay unparsable: a lenient Job.from_dict would
+                # otherwise reload the row as healthy and silently skip it.
+                rows.append((UnparsedRow(
+                    {"probe_error": it.error, "outputs": it.error}), it.meta))
+            else:
+                rows.append((it.job, it.meta))
+        save_queue(rows, dir)
 
     @classmethod
     def load(cls, cap: CapabilityIndex, dir=None, prober=probe) -> QueueDocument:
         doc = cls(cap, prober)
         for job, meta in load_queue(dir):
             if isinstance(job, UnparsedRow):
-                doc.items.append(QueueItem(Job(), meta, error="unparseable row",
+                raw_err = job.raw.get("probe_error") if isinstance(job.raw, dict) else None
+                doc.items.append(QueueItem(Job(), meta, error=raw_err or "unparseable row",
                                            unparsed=job))
             else:
                 doc.items.append(QueueItem(job, meta))

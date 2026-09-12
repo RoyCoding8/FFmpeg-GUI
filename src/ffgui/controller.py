@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -19,7 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from fftui.ffmpeg.capability_index import CapabilityIndex
-from fftui.model import Job
+from fftui.model import Job, Output
 from fftui.util.command_builder import build, build_two_pass
 
 from ffgui.doc import QueueDocument, QueueItem
@@ -32,6 +33,7 @@ from ffgui.ui.tabs import build_tabs, wrap_scroll
 MEDIA_SUFFIXES = {".mp4", ".mkv", ".webm", ".mov", ".avi", ".ts", ".m4v", ".mpg",
                   ".mp3", ".m4a", ".wav", ".flac", ".ogg", ".opus", ".aac", ".wma",
                   ".srt", ".ass", ".vtt", ".jpg", ".png"}
+_BARE_NEGATIVE_RE = re.compile(r"-\d*\.?\d+")
 TARGET_EXT = {"bat": ".bat", "sh": ".sh"}
 _LINUX_TERMINALS = (("x-terminal-emulator", "-e"), ("gnome-terminal", "--"),
                     ("konsole", "-e"), ("xfce4-terminal", "-x"),
@@ -150,7 +152,7 @@ class Controller(QObject):
     def _wire(self) -> None:
         s = self.shell
         s.add_actions(self.add_files_dialog, self.add_folder_dialog)
-        s.export_btn.clicked.connect(self.export_dialog)
+        s.export_btn.clicked.connect(lambda checked=False: self.export_dialog())
         s.run_btn.clicked.connect(self.run_terminal)
         s.empty.add_files_requested.connect(self.add_files_dialog)
         s.queue.itemSelectionChanged.connect(self._on_selection)
@@ -165,11 +167,12 @@ class Controller(QObject):
             lambda item: self.apply_preset(item.text()))
         s.preset_save.clicked.connect(self.save_preset_dialog)
         s.preset_delete.clicked.connect(self.delete_preset)
-        remove = QAction("Remove selected", s)
+        remove = QAction("Remove selected", s.queue)
         remove.setShortcuts([QKeySequence(Qt.Key.Key_Delete),
                              QKeySequence(Qt.Key.Key_Backspace)])
+        remove.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         remove.triggered.connect(self.remove_selected)
-        s.addAction(remove)
+        s.queue.addAction(remove)
         self.status.connect(lambda text: s.statusBar().showMessage(text, 8000))
         self.refresh_presets()
         self.refresh()
@@ -185,14 +188,13 @@ class Controller(QObject):
                           if s.codec_type == "video"), None)
             cells = (
                 item.meta["name"],
-                "",
                 f"{video.width}×{video.height}" if video and video.width else "",
                 self._codec_summary(item),
                 Path(item.job.outputs[0].path).name if item.job.outputs else "",
             )
             for col, text in enumerate(cells, start=1):
                 cell = QTableWidgetItem(text)
-                if col == 5 and item.job.outputs:
+                if col == 4 and item.job.outputs:
                     cell.setToolTip(item.job.outputs[0].path)
                 table.setItem(row, col, cell)
         self.shell.show_empty(len(self.doc) == 0)
@@ -244,6 +246,10 @@ class Controller(QObject):
             out = item.job.outputs[0]
             for page in self.tabs.values():
                 page.populate(out, item.job)
+        else:
+            blank = Output(path="")
+            for page in self.tabs.values():
+                page.populate(blank, Job())
         self._update_preview()
 
     def _update_preview(self) -> None:
@@ -299,8 +305,12 @@ class Controller(QObject):
         if kind == "filter":
             stream = ("audio_filters" if self.cap.filter_kind(component) == "audio"
                       else "video_filters")
-            chain = list(getattr(self.doc.items[row].job, stream).filters)
-            chain.append(f"{component}={opt.name}={value}" if value else f"{component}={opt.name}")
+            job = self.doc.items[row].job
+            prefix = f"{component}={opt.name}"
+            chain = [f for f in getattr(job, stream).filters
+                     if f != prefix and not f.startswith(f"{prefix}=")]
+            if value:
+                chain.append(f"{prefix}={value}")
             return self.doc.set_filters(row, stream, chain)
         if kind == "encoder":
             entry = self.cap.entry("encoder", component)
@@ -324,17 +334,18 @@ class Controller(QObject):
             return self.doc.set_filters(row, key, value.split("\n") if value else [])
         if kind == "chapters":
             return self.doc.set_chapters(row, value)
-        if kind in ("burn", "volume", "loudnorm"):
-            stream = "video_filters" if kind == "burn" else "audio_filters"
-            head = "subtitles" if kind == "burn" else kind
-            keep = [f for f in getattr(job, stream).filters if not f.startswith(head)]
-
-
-            on = is_truthy(value) if kind == "loudnorm" else value
-            if on:
-                keep.append(f"{head}={value}" if kind != "loudnorm"
-                            else "loudnorm=I=-16:TP=-1.5:LRA=11")
-            return self.doc.set_filters(row, stream, keep)
+        if kind == "burn":
+            return self.doc.set_output_field(row, "subtitle_burn_in", value)
+        if kind in ("volume", "loudnorm"):
+            keep = [f for f in job.audio_filters.filters
+                    if f != kind and not f.startswith(kind + "=")]
+            if kind == "loudnorm":
+                if is_truthy(value):
+                    keep.append("loudnorm=I=-16:TP=-1.5:LRA=11")
+            elif value:
+                gain = f"{value}dB" if _BARE_NEGATIVE_RE.fullmatch(value) else value
+                keep.append(f"volume={gain}")
+            return self.doc.set_filters(row, "audio_filters", keep)
         if kind == "faststart":
             return self.doc.set_faststart(row, value)
         elif kind == "hwdecode":
@@ -354,7 +365,7 @@ class Controller(QObject):
         elif kind == "streamtag":
             meta = self.tabs["Metadata"]
             spec, lang = meta.stream_spec.text().strip(), meta.stream_lang.text().strip()
-            if not spec or not lang:
+            if not spec:
                 return "enter a stream spec (e.g. v:0) and a language tag"
             return self.doc.set_stream_meta(row, spec, "language", lang)
         return f"unknown edit {kind!r}"
@@ -510,9 +521,12 @@ class Controller(QObject):
         if not rows:
             self.status.emit("select a row to save as a preset")
             return
+        item = self.doc.items[rows[0]]
+        if item.error or not item.job.inputs or not item.job.outputs:
+            self.status.emit("select a healthy row to save as a preset")
+            return
         name, ok = QInputDialog.getText(self.shell, "Save preset", "Preset name")
         if ok and name:
-            item = self.doc.items[rows[0]]
             save_preset(name, item.job, item.meta)
             self.refresh_presets()
 
@@ -530,6 +544,9 @@ class Controller(QObject):
             job = Job.from_dict(preset_job.to_dict())
             if item.job.inputs and job.inputs:
                 job.inputs[0] = item.job.inputs[0]
+            for out, target in zip(job.outputs, item.job.outputs):
+                out.path = target.path
+            job.outputs = job.outputs[:len(item.job.outputs)]
             item.job = job
             self.doc.touch(row)
         self.refresh()

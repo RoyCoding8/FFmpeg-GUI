@@ -90,6 +90,11 @@ class TabPage(QWidget):
     def load(self, out: Output, job: Job) -> None:
         raise NotImplementedError
 
+    @staticmethod
+    def _set_text(w: QLineEdit, value: str) -> None:
+        if w.text() != value:
+            w.setText(value)
+
     def _watch(self, signal, kind: str, key: str, to_text=str) -> None:
         signal.connect(lambda *a: self.edit.emit(kind, key, to_text(a[0] if a else None)))
 
@@ -127,15 +132,15 @@ class ContainerTab(TabPage):
         self._watch(self.muxer.currentTextChanged, "option", "mux:f")
         self._watch(self.start.textEdited, "field", "start")
         self._watch(self.duration.textEdited, "field", "duration")
-        self._watch(self.overwrite.toggled, "flag", "noconfirm")
+        self._watch(self.overwrite.toggled, "flag", "noconfirm", lambda on: str(not on))
 
     def load(self, out: Output, job: Job) -> None:
-        self.name.setText(out.path)
+        self._set_text(self.name, out.path)
         self.container.setCurrentText(out.container or "")
         self.muxer.setCurrentText(out.options.get("f", ""))
-        self.start.setText(out.start or "")
-        self.duration.setText(out.duration or "")
-        self.overwrite.setChecked(job.noconfirm)
+        self._set_text(self.start, out.start or "")
+        self._set_text(self.duration, out.duration or "")
+        self.overwrite.setChecked(not job.noconfirm)
 
 
 class VideoTab(TabPage):
@@ -145,7 +150,7 @@ class VideoTab(TabPage):
         codec_box, codec_form = _form("Video codec")
         self.codec = QComboBox()
         self.codec.addItem("")
-        _gated(self.codec, [e.name for e in cap.encoders],
+        _gated(self.codec, cap.video_encoders(),
                "encoder list from your ffmpeg build", extra=("copy",))
         codec_form.addRow("Codec", self.codec)
         col.addWidget(codec_box)
@@ -201,15 +206,15 @@ class VideoTab(TabPage):
     def load(self, out: Output, job: Job) -> None:
         v = out.video_options
         self.codec.setCurrentText(out.video_codec or "")
-        self.crf.setText(v.get("crf") or v.get("cq") or "")
-        self.bitrate.setText(v.get("b:v") or "")
-        self.maxrate.setText(v.get("maxrate") or "")
+        self._set_text(self.crf, v.get("crf") or v.get("cq") or "")
+        self._set_text(self.bitrate, v.get("b:v") or "")
+        self._set_text(self.maxrate, v.get("maxrate") or "")
         self.preset.setCurrentText(v.get("preset") or "")
         self.tune.setCurrentText(v.get("tune") or "")
         self.profile.setCurrentText(v.get("profile:v") or "")
         self.pixfmt.setCurrentText(v.get("pix_fmt") or "")
-        self.gop.setText(v.get("g") or "")
-        self.threads.setText(v.get("threads") or "")
+        self._set_text(self.gop, v.get("g") or "")
+        self._set_text(self.threads, v.get("threads") or "")
         self.faststart.setChecked("+faststart" in (out.options.get("movflags") or ""))
 
 
@@ -220,7 +225,7 @@ class AudioTab(TabPage):
         codec_box, codec_form = _form("Audio codec")
         self.codec = QComboBox()
         self.codec.addItem("")
-        _gated(self.codec, [e.name for e in cap.encoders],
+        _gated(self.codec, cap.audio_encoders(),
                "encoder list from your ffmpeg build", extra=("copy",))
         codec_form.addRow("Codec", self.codec)
         col.addWidget(codec_box)
@@ -255,10 +260,10 @@ class AudioTab(TabPage):
     def load(self, out: Output, job: Job) -> None:
         a = out.audio_options
         self.codec.setCurrentText(out.audio_codec or "")
-        self.bitrate.setText(a.get("b:a") or "")
+        self._set_text(self.bitrate, a.get("b:a") or "")
         self.channels.setCurrentText(a.get("ac") or "")
         self.samplerate.setCurrentText(a.get("ar") or "")
-        self.volume.setText(self._audio_expr(job, "volume"))
+        self._set_text(self.volume, self._audio_expr(job, "volume"))
         self.loudnorm.setChecked(self._audio_expr(job, "loudnorm") != "")
 
     @staticmethod
@@ -294,9 +299,10 @@ class SubtitlesTab(TabPage):
     def load(self, out: Output, job: Job) -> None:
         self.codec.setCurrentText(out.subtitle_codec or "")
         self.drop.setChecked(bool(out.sn_explicit))
-        self.burn.setText(next(
-            (f[len("subtitles="):] for f in job.video_filters.filters
-             if f.startswith("subtitles=")), ""))
+        burn = (out.subtitle_burn_in
+                or next((f[len("subtitles="):] for f in job.video_filters.filters
+                         if f.startswith("subtitles=")), ""))
+        self._set_text(self.burn, burn)
 
 
 class FiltersTab(TabPage):
@@ -473,9 +479,9 @@ class MetadataTab(TabPage):
         self._watch(self.stream_spec.textEdited, "streamtag", "spec")
 
     def load(self, out: Output, job: Job) -> None:
-        self.title.setText(out.metadata.get("title", ""))
-        self.comment.setText(out.metadata.get("comment", ""))
-        self.cover.setText(out.cover_art or "")
+        self._set_text(self.title, out.metadata.get("title", ""))
+        self._set_text(self.comment, out.metadata.get("comment", ""))
+        self._set_text(self.cover, out.cover_art or "")
 
 
 class AdvancedTab(TabPage):
@@ -544,20 +550,20 @@ class AdvancedTab(TabPage):
         self._watch(self.loop.textEdited, "input", "-loop")
 
     def load(self, out: Output, job: Job) -> None:
-        self.hwdevice.setText(job.filter_hw_device or "")
+        self._set_text(self.hwdevice, job.filter_hw_device or "")
         self.twopass.setChecked(job.two_pass)
         self.segment.setChecked(bool(out.segment_enabled))
-        self.segment_time.setText(out.segment_time or "")
+        self._set_text(self.segment_time, out.segment_time or "")
 
 
-        self.bsf.setText(next((f"{k}={v}" for k, v in out.bsf.items()), "")
-                         if out.bsf else "")
-        self.tee.setText(out.tee_spec or "")
+        self._set_text(self.bsf, next((f"{k}={v}" for k, v in out.bsf.items()), "")
+                       if out.bsf else "")
+        self._set_text(self.tee, out.tee_spec or "")
         inp = job.inputs[0] if job.inputs else None
         self.hwdecode.setCurrentText(inp.decoder_v if inp and inp.decoder_v else "")
         args = inp.input_args if inp else []
-        self.seek.setText(_flag(args, "-ss"))
-        self.loop.setText(_flag(args, "-loop"))
+        self._set_text(self.seek, _flag(args, "-ss"))
+        self._set_text(self.loop, _flag(args, "-loop"))
 
 
 def _flag(args: list[str], flag: str) -> str:

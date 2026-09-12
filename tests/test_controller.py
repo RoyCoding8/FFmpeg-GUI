@@ -257,11 +257,13 @@ def test_burn_and_volume_free_text_unaffected_by_toggle_fix(wired):
     shell, doc, c, tmp_path = wired
     c.add_paths([str(tmp_path / "alpha.mp4")])
     c._apply_advanced("burn", "", "subs.srt", 0)
-    assert doc.items[0].job.video_filters.filters == ["subtitles=subs.srt"]
+    out = doc.items[0].job.outputs[0]
+    assert out.subtitle_burn_in == "subs.srt"
+    assert not [f for f in out.video_filters.filters if f.startswith("subtitles")]
     c._apply_advanced("burn", "", "", 0)
-    assert doc.items[0].job.video_filters.filters == []
+    assert out.subtitle_burn_in in ("", None)
     c._apply_advanced("volume", "", "-6", 0)
-    assert doc.items[0].job.audio_filters.filters == ["volume=-6"]
+    assert doc.items[0].job.audio_filters.filters == ["volume=-6dB"]
     c._apply_advanced("volume", "", "", 0)
     assert doc.items[0].job.audio_filters.filters == []
 

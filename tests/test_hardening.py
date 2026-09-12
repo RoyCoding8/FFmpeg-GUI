@@ -78,11 +78,11 @@ def test_keyboard_map(qapp, tmp_path, monkeypatch):
     shell = Shell()
     Controller(shell, QueueDocument(CapabilityIndex.stub()), CapabilityIndex.stub(),
                QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat))
-    actions = {a.text(): a.shortcut().toString() for a in shell.actions()}
+    queue_actions = {a.text(): a.shortcut().toString() for a in shell.queue.actions()}
     file_menu = shell.menuBar().actions()[0].menu()
     menu_actions = {a.text(): a.shortcut().toString() for a in file_menu.actions()}
     assert menu_actions.get("&Add files…") == "Ctrl+O"
-    assert actions.get("Remove selected") in ("Del", "Backspace, Del", "Del, Backspace")
+    assert queue_actions.get("Remove selected") in ("Del", "Backspace, Del", "Del, Backspace")
     assert shell.export_btn.text().startswith("&Export")
     assert shell.run_btn.text().startswith("&Run")
 

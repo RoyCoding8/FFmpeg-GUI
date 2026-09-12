@@ -16,7 +16,7 @@ from ffgui.ui.tokens import (
     PREVIEW_MIN_HEIGHT, ROW_HEIGHT, SIDEBAR_WIDTH, SPACING, TAB_NAMES,
 )
 
-QUEUE_COLUMNS = ("Status", "Name", "Duration", "Resolution", "Codec", "Output")
+QUEUE_COLUMNS = ("Status", "Name", "Resolution", "Codec", "Output")
 FORMATS = (("bat", "Windows batch (.bat)"), ("sh", "Shell script (.sh)"))
 
 

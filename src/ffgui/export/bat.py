@@ -18,6 +18,16 @@ _ENV_REF = re.compile(r"%[A-Za-z_][A-Za-z0-9_]*%")
 _TRAILING_BS = re.compile(r"\\+$")
 
 
+def _double_pct(text: str) -> str:
+    out, pos = [], 0
+    for m in _ENV_REF.finditer(text):
+        out.append(text[pos:m.start()].replace("%", "%%"))
+        out.append(m.group())
+        pos = m.end()
+    out.append(text[pos:].replace("%", "%%"))
+    return "".join(out)
+
+
 def bat_token(token: str) -> str:
     """One argv token as cmd.exe must receive it (the file's line, not its expansion)."""
     reject_hostile(token)
@@ -25,7 +35,7 @@ def bat_token(token: str) -> str:
         raise ValueError(f"token cannot be represented in a .bat file: {token!r}")
     if _ENV_REF.fullmatch(token):
         return token
-    body = token.replace("%", "%%")
+    body = _double_pct(token)
     if token and not any(c in BAT_UNSAFE for c in token):
         return body
     if run := _TRAILING_BS.search(body):
