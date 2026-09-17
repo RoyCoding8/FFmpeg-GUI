@@ -124,15 +124,15 @@ def _wire_probe(app: QApplication, shell: Shell, settings: QSettings,
             _probe_failed("ffmpeg still not found — rescan, browse, or paste a path")
 
     shell.loading.cancelled.connect(_cancel)
+    shell.no_ffmpeg.rescan.clicked.connect(rescan)
+    shell.no_ffmpeg.browse.clicked.connect(browse)
+    shell.no_ffmpeg.accepted.connect(locate)
     explicit, found = locate_ffmpeg(settings)
     if found:
         aim_ffmpeg(explicit)
         start_probe()
     else:
         shell.set_state("no-ffmpeg")
-        shell.no_ffmpeg.rescan.clicked.connect(rescan)
-        shell.no_ffmpeg.browse.clicked.connect(browse)
-        shell.no_ffmpeg.accepted.connect(locate)
 
 
 def main(argv: list[str] | None = None) -> int:

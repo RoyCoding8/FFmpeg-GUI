@@ -150,12 +150,14 @@ class Controller(QObject):
                 expert.optionCommitted.connect(self._on_expert_committed)
                 expert.statusMessage.connect(
                     lambda msg: shell.statusBar().showMessage(msg, 8000))
+        current_tab = shell.tabs.currentIndex()
         while shell.tabs.count():
             shell.tabs.widget(0).deleteLater()
             shell.tabs.removeTab(0)
         for name, page in self.tabs.items():
             page.edit.connect(self._on_tab_edit)
             shell.tabs.addTab(wrap_scroll(page), name)
+        shell.tabs.setCurrentIndex(current_tab)
         self._wire()
 
     def _wire(self) -> None:
