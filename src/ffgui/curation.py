@@ -20,8 +20,6 @@ def load(dir: Path | str | None = None) -> dict[str, dict]:
         if not isinstance(data, dict):
             continue
         for key, value in data.items():
-
-
             if isinstance(key, str) and isinstance(value, dict):
                 out[key] = {k: v for k, v in value.items()
                             if k in ("label", "group") and isinstance(v, str)}
@@ -29,8 +27,6 @@ def load(dir: Path | str | None = None) -> dict[str, dict]:
 
 
 def label_of(curations: dict[str, dict], kind: str, component: str, name: str) -> str:
-
-
     entry = curations.get(f"{kind}:{component}:{name}")
     if not isinstance(entry, dict):
         return name

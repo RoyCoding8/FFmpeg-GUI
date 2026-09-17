@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, QThread, QTimer, Signal
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QFileDialog
 
 from fftui.ffmpeg.capability_index import CapabilityIndex
 
@@ -111,7 +111,6 @@ def _wire_probe(app: QApplication, shell: Shell, settings: QSettings,
         start_probe()
 
     def browse() -> None:
-        from PySide6.QtWidgets import QFileDialog
         path, _ = QFileDialog.getOpenFileName(shell, "Locate ffmpeg", "",
                                               "ffmpeg executable (ffmpeg.exe ffmpeg)")
         locate(path)
@@ -152,8 +151,7 @@ def main(argv: list[str] | None = None) -> int:
         return app.exec()
 
     _wire_probe(app, shell, settings, job_files)
-    code = app.exec()
-    return 0 if smoke else code
+    return app.exec()
 
 
 if __name__ == "__main__":

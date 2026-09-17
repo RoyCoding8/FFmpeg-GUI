@@ -58,9 +58,7 @@ def _cmd_literal(line: str) -> str:
 def _sidecar_lines(car: Sidecar) -> list[str]:
     if not car.content.endswith("\n"):
         raise ValueError(f"sidecar {car.path!r} must end with a newline")
-    if "\r" in car.content:
-        raise ValueError(f"sidecar {car.path!r} cannot be represented in a .bat file")
-    if '"' in car.content:
+    if "\r" in car.content or '"' in car.content:
         raise ValueError(f"sidecar {car.path!r} cannot be represented in a .bat file")
     lines = [f"> {bat_token(car.path)} ("]
     for line in car.content.split("\n")[:-1]:

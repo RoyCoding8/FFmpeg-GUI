@@ -6,6 +6,7 @@ from fftui.model import Chapter, Input, Job, Output
 from fftui.util.command_builder import build, build_two_pass
 
 from ffgui.doc import QueueDocument
+from ffgui.ui.tabs import ChaptersTab, FiltersTab
 
 
 @pytest.fixture()
@@ -13,6 +14,14 @@ def doc(qapp):
     d = QueueDocument(CapabilityIndex.stub(), prober=lambda p: Input(path=p))
     d.items.append(_item())
     return d
+
+
+def _emitting(tab_cls):
+    """A fresh tab wired to capture everything it emits."""
+    tab = tab_cls(CapabilityIndex.stub())
+    emitted = []
+    tab.edit.connect(lambda kind, key, value: emitted.append(value))
+    return tab, emitted
 
 
 def _item():
@@ -220,17 +229,13 @@ def test_add_chapter_keeps_row_for_editing_without_premature_emit(qapp):
     """Add inserts an intentionally blank row without emitting: emitting an empty
     start would route through the controller, which rejects it and refreshes
     the row away."""
-    from PySide6.QtWidgets import QPushButton
+    from PySide6.QtWidgets import QPushButton, QTableWidgetItem
 
-    from ffgui.ui.tabs import ChaptersTab
-    tab = ChaptersTab(CapabilityIndex.stub())
-    emitted = []
-    tab.edit.connect(lambda kind, key, value: emitted.append(value))
+    tab, emitted = _emitting(ChaptersTab)
     add = next(b for b in tab.findChildren(QPushButton) if b.text() == "Add chapter")
     add.click()
     assert tab.table.rowCount() == 1
     assert emitted == []
-    from PySide6.QtWidgets import QTableWidgetItem
     tab.table.setItem(0, 0, QTableWidgetItem("12.5"))
     assert len(emitted) == 1
     (start, title, lang), = (r.split("\x1f") for r in emitted[0].split("\n") if r)
@@ -245,10 +250,7 @@ def test_chapter_cells_sanitize_wire_separators(qapp):
     \\n-joined / \\x1f-separated encoding (phantom rows / unpack crash)."""
     from PySide6.QtWidgets import QTableWidgetItem
 
-    from ffgui.ui.tabs import ChaptersTab
-    tab = ChaptersTab(CapabilityIndex.stub())
-    emitted = []
-    tab.edit.connect(lambda kind, key, value: emitted.append(value))
+    tab, emitted = _emitting(ChaptersTab)
     tab.table.insertRow(0)
     for c, text in enumerate(("0", "a\nb\x1fc", "")):
         tab.table.setItem(0, c, QTableWidgetItem(text))
@@ -263,10 +265,7 @@ def test_filter_chain_sanitizes_wire_breaks(qapp):
     """A pasted newline/CR inside one filter entry must not decode back as phantom
     filters (the controller splits the wire value on newline), so the tab
     sanitizes like ChaptersTab._emit."""
-    from ffgui.ui.tabs import FiltersTab
-    tab = FiltersTab(CapabilityIndex.stub())
-    emitted = []
-    tab.edit.connect(lambda kind, key, value: emitted.append(value))
+    tab, emitted = _emitting(FiltersTab)
     listing = tab.lists["video_filters"]
     listing.addItem("scale=640:360\ncrop=10:10\ryadif")
     tab._emit_chain("video_filters", listing)

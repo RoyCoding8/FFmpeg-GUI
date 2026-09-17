@@ -2,25 +2,7 @@
 the chain the builder actually uses."""
 from types import SimpleNamespace
 
-import pytest
-from fftui.ffmpeg.capability_index import CapabilityIndex
-from fftui.model import Input, InputStream
-
 from ffgui.doc import QueueDocument
-
-
-@pytest.fixture()
-def probe():
-    return lambda path: Input(path=str(path), streams=[
-        InputStream(input_index=0, spec="v:0", codec_type="video",
-                    codec_name="h264", width=64, height=48)])
-
-
-@pytest.fixture()
-def doc(qapp, tmp_path, probe):
-    d = QueueDocument(CapabilityIndex.stub(), prober=probe)
-    d.add_files([str(tmp_path / "alpha.mp4")])
-    return d
 
 
 def _muxer_cap():

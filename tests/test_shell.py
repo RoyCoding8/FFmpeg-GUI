@@ -18,15 +18,17 @@ def test_empty_state_click_requests_add_files(qapp):
     assert hits == [1]
 
 
-def test_add_actions_reuses_file_menu(qapp):
-    """Re-wiring actions (second controller, re-wire) must not pile up File menus."""
+def test_add_actions_rewires_into_one_file_menu(qapp):
+    """Re-wiring actions (second controller, re-wire) must not pile up File
+    menus or duplicate the action pair inside it."""
     shell = Shell()
     shell.add_actions(lambda: None, lambda: None)
     shell.add_actions(lambda: None, lambda: None)
     file_menus = [a.menu() for a in shell.menuBar().actions()
                   if a.menu() is not None and a.menu().title() == "&File"]
     assert len(file_menus) == 1
-    assert "&Add files…" in [a.text() for a in file_menus[0].actions()]
+    assert [a.text() for a in file_menus[0].actions()] == [
+        "&Add files…", "Add fol&der…"]
 
 
 def _capture_modal(monkeypatch):
@@ -66,6 +68,8 @@ def test_add_actions_does_not_duplicate_actions(qapp):
     assert len(file_menus) == 1
     assert [a.text() for a in file_menus[0].actions()] == [
         "&Add files…", "Add fol&der…"]
+
+
 
 
 def test_add_actions_rewire_connects_latest(qapp):

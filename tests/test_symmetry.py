@@ -124,7 +124,7 @@ def test_routed_edits_drop_parked_unparsed(ctl):
         lambda: c._apply_advanced("volume", "", "-6", 0),
         lambda: c._apply_advanced("loudnorm", "", "True", 0),
         lambda: c._apply_advanced("hwdecode", "", "", 0),
-        lambda: c._apply_codec(0, "video", "libx264"),
+        lambda: c._basic_edits["codec"](0, "video", "libx264"),
         lambda: c._apply_option(0, "video:crf", "23"),
         lambda: c._apply_field(0, "title", "hi"),
         lambda: c._apply_flag(0, "two_pass", "True"),

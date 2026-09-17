@@ -1,25 +1,6 @@
 """Gate: presets don't leak output paths; volume replaces only its own filter;
 Remove-selected shortcut is scoped to the queue."""
-import pytest
-from PySide6.QtCore import QSettings, Qt
-from fftui.ffmpeg.capability_index import CapabilityIndex
-from fftui.model import Input, InputStream
-
-from ffgui.controller import Controller
-from ffgui.doc import QueueDocument
-from ffgui.ui.shell import Shell
-
-
-@pytest.fixture()
-def wired(qapp, tmp_path, monkeypatch):
-    monkeypatch.setenv("FFGUI_CACHE_DIR", str(tmp_path / "cache"))
-    probe = lambda path: Input(path=str(path), streams=[
-        InputStream(input_index=0, spec="v:0", codec_type="video",
-                    codec_name="h264", width=64, height=48)])
-    settings = QSettings(str(tmp_path / "settings.ini"), QSettings.Format.IniFormat)
-    shell = Shell()
-    doc = QueueDocument(CapabilityIndex.stub(), prober=probe)
-    return shell, doc, Controller(shell, doc, CapabilityIndex.stub(), settings), tmp_path
+from PySide6.QtCore import Qt
 
 
 def test_apply_preset_keeps_target_output_path(wired):

@@ -1,6 +1,5 @@
 """Gate: stream language tags clear; presets reject unhealthy rows and never
 change a row's output structure; selecting an error row clears the tabs."""
-import pytest
 from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QInputDialog
 from fftui.ffmpeg.capability_index import CapabilityIndex
@@ -10,18 +9,6 @@ from ffgui.controller import Controller
 from ffgui.doc import QueueDocument, QueueItem
 from ffgui.store import fresh_meta
 from ffgui.ui.shell import Shell
-
-
-@pytest.fixture()
-def wired(qapp, tmp_path, monkeypatch):
-    monkeypatch.setenv("FFGUI_CACHE_DIR", str(tmp_path / "cache"))
-    probe = lambda path: Input(path=str(path), streams=[
-        InputStream(input_index=0, spec="v:0", codec_type="video",
-                    codec_name="h264", width=64, height=48)])
-    settings = QSettings(str(tmp_path / "settings.ini"), QSettings.Format.IniFormat)
-    shell = Shell()
-    doc = QueueDocument(CapabilityIndex.stub(), prober=probe)
-    return shell, doc, Controller(shell, doc, CapabilityIndex.stub(), settings), tmp_path
 
 
 def test_streamtag_clears_language(wired):

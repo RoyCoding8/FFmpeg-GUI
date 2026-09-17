@@ -22,8 +22,6 @@ def sh_token(token: str) -> str:
 
 
 def _sidecar_lines(car: Sidecar) -> list[str]:
-
-
     if not car.content.endswith("\n"):
         return [f"printf %s {shlex.quote(car.content)} > {sh_token(car.path)}"]
     delim = _HEREDOC
@@ -34,8 +32,6 @@ def _sidecar_lines(car: Sidecar) -> list[str]:
 
 def sh_script(blocks: list[ExportBlock], header: ScriptHeader) -> str:
     lines = ["#!/bin/sh", "set -e",
-
-
              "trap 'printf \"Press Enter to close... \"; read -r dummy || true' EXIT",
              *header_comment(header, "# ")]
     for block in blocks:

@@ -16,7 +16,9 @@ from PySide6.QtWidgets import (
 )
 
 from fftui.model import Option
+from fftui.util.validation import validate_option
 
+from ffgui.curation import label_of, load
 from ffgui.store import is_truthy
 from ffgui.ui.tokens import SPACING
 
@@ -64,7 +66,6 @@ class OptionTreeModel(QAbstractItemModel):
     def __init__(self, cap, parent=None) -> None:
         super().__init__(parent)
         self.cap = cap
-        from ffgui.curation import load
         self.curations = load()
         self.root = _Node("")
         self.root.children = [_Node(kind, self.root) for kind in KINDS]
@@ -97,8 +98,6 @@ class OptionTreeModel(QAbstractItemModel):
 
     def index(self, row: int, column: int, parent=QModelIndex()) -> QModelIndex:
         node = self._node(parent) or self.root
-
-
         if row < 0 or column not in (0, 1) or row >= len(node.children):
             return QModelIndex()
         return self.createIndex(row, column, node.children[row])
@@ -107,8 +106,6 @@ class OptionTreeModel(QAbstractItemModel):
         node = self._node(index)
         if node is None or node.parent is None or node.parent is self.root:
             return QModelIndex()
-
-
         grandparent = node.parent.parent
         if grandparent is None:
             return QModelIndex()
@@ -127,7 +124,6 @@ class OptionTreeModel(QAbstractItemModel):
             return None
         if self._depth(node) == 3:
             if index.column() == 0:
-                from ffgui.curation import label_of
                 return label_of(self.curations, node.parent.parent.label,
                                 node.parent.label, node.opt.name)
             if node.value:
@@ -172,8 +168,6 @@ class OptionTreeModel(QAbstractItemModel):
             try:
                 opts = self.cap.options_for(node.parent.label, node.label)
             except (RuntimeError, OSError):
-
-
                 opts = []
             node.children = [_Node(opt.name, node, opt) for opt in opts]
         node.loaded = True
@@ -303,20 +297,19 @@ class ExpertPanel(QWidget):
         self.tree.setItemDelegateForColumn(1, self.delegate)
         self.tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         col.addWidget(self.tree)
+        self.model = self.tree.model()
         self.kind.currentTextChanged.connect(self._fill_components)
         self.component.currentTextChanged.connect(self._expand_target)
         self._fill_components(self.kind.currentText())
 
     def _validate(self, opt: Option, value: str) -> str | None:
-        from fftui.util.validation import validate_option
         error = validate_option(opt, value)
         # validate_option promises a one-line reason, but hostile values echo
         # back raw — keep them off the status bar/tooltip as a single line.
         return " ".join(error.replace("\0", " ").split()) if error else None
 
     def _fill_components(self, kind: str) -> None:
-        names = [getattr(e, "name", e)
-                 for e in getattr(self.cap, _PLURAL.get(kind, kind), [])]
+        names = self.model._components(kind)
         self.component.blockSignals(True)
         self.component.clear()
         self.component.addItems(names)

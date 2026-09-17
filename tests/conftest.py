@@ -4,6 +4,14 @@ import sys
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
+from PySide6.QtCore import QSettings
+
+from fftui.ffmpeg.capability_index import CapabilityIndex
+from fftui.model import Input, InputStream
+
+from ffgui.controller import Controller
+from ffgui.doc import QueueDocument
+from ffgui.ui.shell import Shell
 
 
 @pytest.fixture(scope="session")
@@ -12,6 +20,34 @@ def qapp():
 
     app = QApplication.instance() or QApplication([])
     yield app
+
+
+def _stub_probe(path) -> Input:
+    """One video stream per file — the shape nearly every fixture assumes."""
+    return Input(path=str(path), streams=[
+        InputStream(input_index=0, spec="v:0", codec_type="video",
+                    codec_name="h264", width=64, height=48)])
+
+
+@pytest.fixture()
+def probe():
+    return _stub_probe
+
+
+@pytest.fixture()
+def doc(qapp, tmp_path, probe):
+    d = QueueDocument(CapabilityIndex.stub(), prober=probe)
+    d.add_files([str(tmp_path / "alpha.mp4")])
+    return d
+
+
+@pytest.fixture()
+def wired(qapp, tmp_path, monkeypatch, probe):
+    monkeypatch.setenv("FFGUI_CACHE_DIR", str(tmp_path / "cache"))
+    settings = QSettings(str(tmp_path / "settings.ini"), QSettings.Format.IniFormat)
+    shell = Shell()
+    doc = QueueDocument(CapabilityIndex.stub(), prober=probe)
+    return shell, doc, Controller(shell, doc, CapabilityIndex.stub(), settings), tmp_path
 
 
 def close_top_level_widgets() -> None:

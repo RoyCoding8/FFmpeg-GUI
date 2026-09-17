@@ -96,8 +96,6 @@ class NoFfmpegPage(QWidget):
         self.manual.editingFinished.connect(self._commit_manual)
 
     def _commit_manual(self) -> None:
-
-
         path = self.manual.text().strip()
         if path:
             self.accepted.emit(path)
@@ -143,8 +141,6 @@ def error_modal(parent: QWidget, title: str, details: str) -> None:
     try:
         box.exec()
     finally:
-
-
         box.setParent(None)
         box.deleteLater()
 
@@ -201,7 +197,6 @@ class Shell(QMainWindow):
         self.regions = {"sidebar": self.sidebar, "queue": self.queue_stack,
                         "tabs": self.tabs, "preview": self.preview,
                         "bottomBar": self.bottom_bar}
-
 
     def _sidebar(self) -> QWidget:
         box = QFrame(objectName="sidebar")
@@ -271,13 +266,11 @@ class Shell(QMainWindow):
         row.addWidget(self.run_btn)
         return self.bottom_bar
 
-
     def set_state(self, name: str) -> None:
         self.state_stack.setCurrentIndex(("workspace", "loading", "no-ffmpeg").index(name))
 
     def show_empty(self, empty: bool) -> None:
         self.queue_stack.setCurrentIndex(0 if empty else 1)
-
 
     def add_actions(self, add_files, add_folder) -> tuple[QAction, QAction]:
         open_files = QAction(icons.icon("plus"), "&Add files…", self)

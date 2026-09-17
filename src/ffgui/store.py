@@ -61,15 +61,10 @@ def _meta(raw: object) -> dict:
             meta[key] = _META_DEFAULTS[key]
     enabled = meta["enabled"]
     if isinstance(enabled, str):
-
         meta["enabled"] = is_truthy(enabled)
-    elif enabled is None:
-        meta["enabled"] = _META_DEFAULTS["enabled"]
     elif isinstance(enabled, (bool, int, float)):
         meta["enabled"] = bool(enabled)
     else:
-
-
         meta["enabled"] = _META_DEFAULTS["enabled"]
     return meta
 
@@ -88,15 +83,29 @@ def _queue_path(dir: str | os.PathLike[str] | None) -> Path:
     return cache_dir(dir) / "queue.json"
 
 
+def _queue_lock(dir):
+    """Every queue read-modify-write holds both the in-process lock and the
+    cross-process file lock beside queue.json."""
+    return interprocess_lock(_queue_path(dir).with_name("queue.json.lock"))
+
+
+def _read_json(path: Path) -> object | None:
+    """Parsed JSON, or None when the file is unreadable (quarantined, or
+    already gone because a concurrent process quarantined it)."""
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        quarantine_or_raise(path)
+        return None
+
+
 def _read_queue_raw(dir) -> list[dict]:
     path = _queue_path(dir)
     sweep_stale_temps(path)
     if not path.is_file():
         return []
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
-        quarantine_or_raise(path)
+    raw = _read_json(path)
+    if raw is None:
         return []
     if (isinstance(raw, dict) and set(raw) == {"schema", "rows"}
             and is_schema_stamp(raw["schema"]) and raw["schema"] == GUI_SCHEMA
@@ -110,7 +119,7 @@ def _read_queue_raw(dir) -> list[dict]:
 def load_queue(dir=None) -> list[Row]:
     """The queue as ``(Job | UnparsedRow, gui-meta)`` pairs in stored order."""
     out: list[Row] = []
-    with _QUEUE_LOCK, interprocess_lock(_queue_path(dir).with_name("queue.json.lock")):
+    with _QUEUE_LOCK, _queue_lock(dir):
         for entry in _read_queue_raw(dir):
             meta = _meta(entry.get("gui"))
             raw = entry.get("job")
@@ -127,8 +136,6 @@ def _row_entry(row: Row) -> dict:
     if not isinstance(job, (Job, UnparsedRow)):
         raise ValueError(
             f"queue row must be a Job or UnparsedRow, got {type(job).__name__}")
-
-
     gui = _meta(meta)
     if isinstance(job, UnparsedRow):
         return {"job": job.raw, "gui": gui}
@@ -139,7 +146,7 @@ def save_queue(rows: list[Row], dir=None) -> None:
     """Persist the queue; an ``UnparsedRow`` is written back byte-equal, never dropped."""
     if not isinstance(rows, (list, tuple)):
         raise ValueError(f"queue rows must be a list, got {type(rows).__name__}")
-    with _QUEUE_LOCK, interprocess_lock(_queue_path(dir).with_name("queue.json.lock")):
+    with _QUEUE_LOCK, _queue_lock(dir):
         write_text_atomic(_queue_path(dir), json.dumps(
             {"schema": GUI_SCHEMA, "rows": [_row_entry(r) for r in rows]}, indent=2))
 
@@ -181,7 +188,7 @@ def import_tui_queue(tui_dir=None, dir=None) -> tuple[int, int, list[str]]:
     if not rows and not errors:
         return 0, 0, []
     imported = skipped = 0
-    with _QUEUE_LOCK, interprocess_lock(_queue_path(dir).with_name("queue.json.lock")):
+    with _QUEUE_LOCK, _queue_lock(dir):
         current = _read_queue_raw(dir)
         seen = {h for e in current if (h := _meta(e.get("gui")).get("source_hash"))}
         for n, raw in enumerate(rows):
@@ -227,10 +234,8 @@ def load_presets(dir=None) -> dict[str, tuple[Job, dict]]:
     sweep_stale_temps(path)
     if not path.is_file():
         return {}
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
-        quarantine_or_raise(path)
+    raw = _read_json(path)
+    if raw is None:
         return {}
     presets = _presets_dict(raw)
     if presets is None:
@@ -262,11 +267,7 @@ def delete_preset(name: str, dir=None) -> None:
 def _write_presets(mutate, dir) -> None:
     path = _presets_path(dir)
     with interprocess_lock(path.with_name("presets.json.lock")):
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
-        except (json.JSONDecodeError, OSError, UnicodeDecodeError):
-            quarantine_or_raise(path)
-            raw = None
+        raw = _read_json(path) if path.is_file() else None
         presets = _presets_dict(raw)
         if presets is None:
             if raw is not None:

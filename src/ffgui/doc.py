@@ -5,10 +5,9 @@ from __future__ import annotations
 
 import dataclasses
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
-
-import re
 
 from PySide6.QtCore import QObject, Signal
 
@@ -102,8 +101,6 @@ class QueueItem:
     job: Job
     meta: dict
     error: str | None = None
-
-
     unparsed: UnparsedRow | None = None
 
 
@@ -146,8 +143,6 @@ class QueueDocument(QObject):
         return added
 
     def remove_rows(self, rows: list[int]) -> None:
-
-
         if not isinstance(rows, (list, tuple)):
             return
         targets = sorted({r for r in rows
@@ -181,8 +176,6 @@ class QueueDocument(QObject):
         return row + 1
 
     def item(self, row: int) -> QueueItem:
-
-
         if isinstance(row, bool) or not isinstance(row, int) \
                 or not 0 <= row < len(self.items):
             raise IndexError(f"no such row {row}")
@@ -208,7 +201,6 @@ class QueueDocument(QObject):
     def __len__(self) -> int:
         return len(self.items)
 
-
     def _codec_warning(self, out: Output, stream: str, codec: str) -> str | None:
         """Warning-only compat gate: stream-copy and subtitle codecs, and
         unknown muxers, can't be judged."""
@@ -228,21 +220,16 @@ class QueueDocument(QObject):
         out = self._out(row)
         if out is None:
             return "row has no output yet"
+        warning = None
         if not codec:
-
-
             setattr(out, STREAM_FIELDS[stream], None)
             if stream == "subtitle":
-
-
                 out.sn_explicit = False
-            self.touch(row)
-            return None
-        warning = self._codec_warning(out, stream, codec)
-        if stream == "subtitle" and codec == "none":
+        elif stream == "subtitle" and codec == "none":
             out.subtitle_codec = None
             out.sn_explicit = True
         else:
+            warning = self._codec_warning(out, stream, codec)
             setattr(out, STREAM_FIELDS[stream], codec)
             if stream == "subtitle":
                 out.sn_explicit = False
@@ -256,8 +243,6 @@ class QueueDocument(QObject):
             return error
         item = self.item(row)
         if scope == "global":
-
-
             if value or _is_bool_global(key):
                 setattr(item.job, key, _coerce_global(key, value))
             else:
@@ -276,8 +261,6 @@ class QueueDocument(QObject):
             if scope == "mux" and key == "f" and value:
                 out.container = None
             if scope == "video" and key in ("crf", "cq"):
-
-
                 opts.pop("cq" if key == "crf" else "crf", None)
         self.touch(row)
         return None
@@ -294,7 +277,7 @@ class QueueDocument(QObject):
             return f"{key} must not contain quotes or newlines"
         if key == "path" and not value:
             return "output path must not be empty"
-        if key in ("duration",) and value.startswith("-"):
+        if key == "duration" and value.startswith("-"):
             return "duration must not be negative"
         out = self._out(row)
         if out is None:
@@ -327,8 +310,6 @@ class QueueDocument(QObject):
 
     def bulk_set_option(self, rows: list[int], scope: str, key: str,
                         value: str) -> dict[int, str | None]:
-
-
         out: dict[int, str | None] = {}
         if not isinstance(rows, (list, tuple)):
             return out
@@ -338,7 +319,6 @@ class QueueDocument(QObject):
             except IndexError:
                 out[row] = f"no such row {row}"
         return out
-
 
     def set_two_pass(self, row: int, on: bool | str) -> None:
         # Total over Qt variants: bare "False" is truthy as a string, so text
@@ -432,8 +412,6 @@ class QueueDocument(QObject):
             return "chapter must be a Chapter row"
         if any(not (c.start or "").strip() for c in rows):
             return "chapter needs a start time"
-
-
         if any(sep in (c.start or "") + (c.title or "") + (c.lang or "")
                for c in rows for sep in ("\n", "\r", "\x1f")):
             return "chapter text must be single-line"
@@ -516,8 +494,6 @@ class QueueDocument(QObject):
         while flag in args:
             i = args.index(flag)
             args.pop(i)
-
-
             if i < len(args):
                 args.pop(i)
         if value:
@@ -593,7 +569,6 @@ class QueueDocument(QObject):
         job = self.item(row).job
         return build_two_pass(job) if job.two_pass else [build(job)]
 
-
     def save(self, dir=None) -> None:
         rows = []
         for it in self.items:
@@ -644,8 +619,6 @@ def _validate(scope: str, key: str, value: str) -> str | None:
     if scope in ("video", "audio", "mux") and key == "container":
         return "Container is set from the container box, not a codec/mux option"
     kind = CURATED_TYPES.get(key, "string")
-
-
     if kind == "int" and value and not _INT_RE.fullmatch(value):
         return f"{key} wants an integer, got {value!r}"
     return None
@@ -662,9 +635,9 @@ def _is_bool_global(key: str) -> bool:
 
 
 def _coerce_global(key: str, value: str):
-    field = _job_field(key)
-    if field is not None and (field.type is bool or field.type == "bool"):
+    if _is_bool_global(key):
         return is_truthy(value)
+    field = _job_field(key)
     if field is not None and (field.type is int or field.type == "int"):
         try:
             return int(value)

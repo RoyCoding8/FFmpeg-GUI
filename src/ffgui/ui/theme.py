@@ -8,6 +8,7 @@ import re
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QGuiApplication
 
+from ffgui.ui import icons
 from ffgui.ui.tokens import (
     DARK, FONT_STACK, LIGHT, MONO_PT, MONO_STACK, PALETTES, RADII, ROW_HEIGHT,
     SPACING, TYPE,
@@ -158,10 +159,10 @@ _applied_mode = "system"
 def build_qss(pal: dict) -> str:
     """QSS with every @token replaced in one pass (values are literal text)."""
     tokens = {**pal, **UNITS}
-    if missing := sorted({m.group(1) for m in re.finditer(r"@(\w+)", QSS)} - set(tokens)):
+    names = {m.group(1) for m in re.finditer(r"@(\w+)", QSS)}
+    if missing := sorted(names - set(tokens)):
         raise ValueError(f"palette missing tokens: {missing}")
-    if bad := sorted(n for n in {m.group(1) for m in re.finditer(r"@(\w+)", QSS)}
-                     if not isinstance(tokens[n], str)):
+    if bad := sorted(n for n in names if not isinstance(tokens[n], str)):
         raise ValueError(f"palette tokens must be strings: {bad}")
     pattern = re.compile(
         "@(" + "|".join(re.escape(n) for n in sorted(tokens, key=len, reverse=True)) + r")\b")
@@ -196,8 +197,6 @@ def active_text() -> str:
 def apply_theme(app, mode: str = "system") -> None:
     """Set the stylesheet for the whole application; system mode re-applies on change."""
     global _applied_mode
-    from ffgui.ui import icons
-
     stylesheet = build_qss(resolve(mode))
     _applied_mode = mode
     icons.icon.cache_clear()

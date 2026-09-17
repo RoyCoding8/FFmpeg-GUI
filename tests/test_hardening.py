@@ -68,16 +68,8 @@ def test_invalid_option_inline_state(qapp):
     assert edit.property("invalid") is False
 
 
-def test_keyboard_map(qapp, tmp_path, monkeypatch):
-    from fftui.ffmpeg.capability_index import CapabilityIndex
-
-    from ffgui.controller import Controller
-    from ffgui.doc import QueueDocument
-
-    monkeypatch.setenv("FFGUI_CACHE_DIR", str(tmp_path / "c"))
-    shell = Shell()
-    Controller(shell, QueueDocument(CapabilityIndex.stub()), CapabilityIndex.stub(),
-               QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat))
+def test_keyboard_map(wired):
+    shell, doc, c, tmp = wired
     queue_actions = {a.text(): a.shortcut().toString() for a in shell.queue.actions()}
     file_menu = shell.menuBar().actions()[0].menu()
     menu_actions = {a.text(): a.shortcut().toString() for a in file_menu.actions()}

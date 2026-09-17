@@ -1,37 +1,35 @@
 """Controller tests offscreen: table refresh, preview, export, presets, locator."""
 
+import gc
+import json
 import os
 import sys
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from PySide6.QtCore import QEvent, QMimeData, QSettings, QThread, QUrl
+from PySide6.QtWidgets import QCheckBox, QDialog, QFileDialog, QInputDialog
 from fftui.ffmpeg.capability_index import CapabilityIndex
-from fftui.model import InputStream, Input
+from fftui.model import Input, InputStream, Job, Output
+from fftui.util.command_builder import build
 
-from ffgui.controller import Controller, aim_ffmpeg, locate_ffmpeg
-from ffgui.doc import QueueDocument
+import ffgui.doc as doc_mod
+from ffgui.app import _launch_probe, _restore_state
+from ffgui.controller import (
+    Controller, _DropFilter, aim_ffmpeg, launch_script, locate_ffmpeg,
+    terminal_argv)
+from ffgui.doc import QueueDocument, QueueItem
+from ffgui.store import UnparsedRow, delete_preset, load_presets, save_preset
+from ffgui.ui.shell import Shell
 
 
 @pytest.fixture()
-def env(qapp, tmp_path, monkeypatch):
-
+def env(qapp, tmp_path):
     for stem in ("alpha", "beta"):
-        p = tmp_path / f"{stem}.mp4"
-        p.write_bytes(b"0")
-        monkeypatch.setattr(
-            "ffgui.doc.probe",
-            lambda path, _p=p: Input(path=str(_p), streams=[
-                InputStream(input_index=0, spec="v:0", codec_type="video",
-                            codec_name="h264", width=64, height=48),
-                InputStream(input_index=0, spec="a:0", codec_type="audio",
-                            codec_name="aac", sample_rate=48000)]),
-            raising=False,
-        )
-
-
-    import ffgui.doc as doc_mod
+        (tmp_path / f"{stem}.mp4").write_bytes(b"0")
     real = doc_mod.probe
-    doc_mod.probe = lambda path: Input(path=path, streams=[
+    doc_mod.probe = lambda path: Input(path=str(path), streams=[
         InputStream(input_index=0, spec="v:0", codec_type="video",
                     codec_name="h264", width=64, height=48),
         InputStream(input_index=0, spec="a:0", codec_type="audio",
@@ -42,10 +40,6 @@ def env(qapp, tmp_path, monkeypatch):
 
 @pytest.fixture()
 def wired(qapp, env, tmp_path, monkeypatch):
-    from PySide6.QtCore import QSettings
-
-    from ffgui.ui.shell import Shell
-
     monkeypatch.setenv("FFGUI_CACHE_DIR", str(tmp_path / "cache"))
     settings = QSettings(str(tmp_path / "settings.ini"), QSettings.Format.IniFormat)
     shell = Shell()
@@ -104,7 +98,6 @@ def test_presets_round_trip(wired):
     shell, doc, c, tmp_path = wired
     c.add_paths([str(tmp_path / "alpha.mp4")])
     shell.queue.selectRow(0)
-    from ffgui.store import delete_preset, load_presets, save_preset
     doc.set_option(0, "video", "crf", "22")
     save_preset("mine", doc.items[0].job, doc.items[0].meta)
     assert "mine" in load_presets()
@@ -137,9 +130,6 @@ def test_remove_selected(wired):
 
 
 def test_locator_chain(qapp, tmp_path, monkeypatch):
-    from PySide6.QtCore import QSettings
-
-
     monkeypatch.setenv("FFTUI_FFMPEG_DIR", "")
     fake = tmp_path / "ffmpeg.exe"
     fake.write_bytes(b"")
@@ -169,9 +159,6 @@ def test_locator_chain(qapp, tmp_path, monkeypatch):
 
 
 def _error_row():
-    from fftui.model import Job
-
-    from ffgui.doc import QueueItem
     return QueueItem(Job(inputs=[], outputs=[]),
                      {"name": "bad", "enabled": True, "notes": "", "source_hash": ""},
                      error="unreadable")
@@ -179,7 +166,6 @@ def _error_row():
 
 def test_apply_preset_copies_per_row(wired):
     shell, doc, c, tmp_path = wired
-    from ffgui.store import delete_preset, load_presets, save_preset
     c.add_paths([str(tmp_path / "alpha.mp4"), str(tmp_path / "beta.mp4")])
     doc.set_option(0, "video", "crf", "22")
     save_preset("mine", doc.items[0].job, doc.items[0].meta)
@@ -278,7 +264,6 @@ def test_selection_clears_after_remove(wired):
 
 
 def test_launch_script_platform_dispatch(monkeypatch):
-    from ffgui.controller import launch_script, terminal_argv
     monkeypatch.setattr("ffgui.controller.sys", type("S", (), {"platform": "win32"}))
     opened = []
     monkeypatch.setattr("ffgui.controller.os.startfile",
@@ -309,7 +294,6 @@ def test_launch_script_refuses_bat_off_windows(monkeypatch):
     """run_terminal picks the format from the save-dialog suffix while launch
     dispatched on platform: a .bat saved on posix was fed to `sh --`, which
     parses cmd.exe syntax line by line. Refuse loudly instead."""
-    from ffgui.controller import launch_script
     monkeypatch.setattr("ffgui.controller.sys", type("S", (), {"platform": "linux"}))
     with pytest.raises(RuntimeError, match="\\.bat"):
         launch_script("/tmp/run.bat")
@@ -317,7 +301,6 @@ def test_launch_script_refuses_bat_off_windows(monkeypatch):
 
 def test_expert_commit_refreshes_preview(wired):
     """Expert commits drive the same queue/preview refresh as tab edits."""
-    from types import SimpleNamespace
 
     shell, doc, c, tmp_path = wired
     c.add_paths([str(tmp_path / "alpha.mp4")])
@@ -330,7 +313,6 @@ def test_expert_commit_refreshes_preview(wired):
 
 def test_expert_commit_error_surfaces_status(wired):
     """Expert validation failures must go loud, not vanish in the signal."""
-    from types import SimpleNamespace
 
     shell, doc, c, tmp_path = wired
     c.add_paths([str(tmp_path / "alpha.mp4")])
@@ -359,7 +341,6 @@ def test_apply_preset_keeps_target_concat_parts(wired):
     """Concat part-files identify the target row's input: a preset must not
     leak its own saved parts onto the row it is applied to."""
     shell, doc, c, tmp_path = wired
-    from ffgui.store import delete_preset, save_preset
     c.add_paths([str(tmp_path / "alpha.mp4"), str(tmp_path / "beta.mp4")])
     doc.items[0].job.inputs[0].concat_paths = ["part1.mp4"]
     doc.items[1].job.inputs[0].concat_paths = ["mine-only.mp4"]
@@ -374,7 +355,6 @@ def test_apply_preset_converts_parked_row(wired):
     """Applying a preset replaces the job: a parked UnparsedRow must heal,
     or save() writes the stale bytes back over the preset."""
     shell, doc, c, tmp_path = wired
-    from ffgui.store import UnparsedRow, delete_preset, save_preset
     c.add_paths([str(tmp_path / "alpha.mp4")])
     save_preset("px", doc.items[0].job, doc.items[0].meta)
     doc.items[0].unparsed = UnparsedRow({"outputs": 7})
@@ -448,9 +428,6 @@ def test_run_terminal_picks_native_target(wired, monkeypatch):
 
 
 def test_export_n_scripts_disambiguates_colliding_stems(wired):
-    from fftui.model import Input, Job, Output
-
-    from ffgui.doc import QueueItem
     shell, doc, c, tmp_path = wired
     for inp, name in (("/v/same.mp4", "same"), ("/w/other.mp4", "other"),
                       ("/x/third.mp4", "third")):
@@ -503,16 +480,21 @@ def test_export_to_suffix_less_path(wired):
     assert out.is_file()
 
 
-def test_export_dialog_surfaces_build_error_as_status(wired, monkeypatch):
-    from fftui.model import Input, Job, Output
+def _unbuildable_row(wired):
+    """A wired controller holding a row whose argv a .bat cannot represent,
+    with the status sink attached. Returns (shell, doc, c, tmp_path, messages)."""
 
-    from ffgui.doc import QueueItem
     shell, doc, c, tmp_path = wired
     doc.items.append(QueueItem(
         Job(inputs=[Input(path='my"quote.mp4')], outputs=[Output(path="o.mp4")]),
         {"name": "q", "enabled": True, "notes": "", "source_hash": ""}))
     messages = []
     c.status.connect(messages.append)
+    return shell, doc, c, tmp_path, messages
+
+
+def test_export_dialog_surfaces_build_error_as_status(wired, monkeypatch):
+    shell, doc, c, tmp_path, messages = _unbuildable_row(wired)
     target = tmp_path / "run.bat"
     with patch("ffgui.controller.QFileDialog.getSaveFileName",
                return_value=(str(target), "")):
@@ -522,15 +504,7 @@ def test_export_dialog_surfaces_build_error_as_status(wired, monkeypatch):
 
 
 def test_run_terminal_export_failure_skips_launch(wired, monkeypatch):
-    from fftui.model import Input, Job, Output
-
-    from ffgui.doc import QueueItem
-    shell, doc, c, tmp_path = wired
-    doc.items.append(QueueItem(
-        Job(inputs=[Input(path='my"quote.mp4')], outputs=[Output(path="o.mp4")]),
-        {"name": "q", "enabled": True, "notes": "", "source_hash": ""}))
-    messages = []
-    c.status.connect(messages.append)
+    shell, doc, c, tmp_path, messages = _unbuildable_row(wired)
     launched = []
     monkeypatch.setattr("ffgui.controller.launch_script", launched.append)
     target = tmp_path / "run.bat"
@@ -569,10 +543,6 @@ def test_run_terminal_launch_oserror_surfaced(wired, monkeypatch):
 
 
 def test_restore_state_tolerates_corrupt_values(qapp, tmp_path):
-    from PySide6.QtCore import QSettings
-
-    from ffgui.app import _restore_state
-    from ffgui.ui.shell import Shell
     ini = tmp_path / "corrupt.ini"
     ini.write_text("[General]\ntab=bogus\nsplitter=junk\n", encoding="utf-8")
     settings = QSettings(str(ini), QSettings.Format.IniFormat)
@@ -582,10 +552,6 @@ def test_restore_state_tolerates_corrupt_values(qapp, tmp_path):
 
 
 def test_restore_state_applies_valid_values(qapp, tmp_path):
-    from PySide6.QtCore import QSettings
-
-    from ffgui.app import _restore_state
-    from ffgui.ui.shell import Shell
     ini = tmp_path / "good.ini"
     settings = QSettings(str(ini), QSettings.Format.IniFormat)
     settings.setValue("tab", 2)
@@ -614,7 +580,6 @@ def test_edits_on_output_less_row_surface_status(wired):
 def test_terminal_argv_darwin_passes_path_as_argv(monkeypatch):
     """A hostile path must never enter the AppleScript source: it travels as
     an osascript argument and is quoted at runtime by `quoted form of`."""
-    from ffgui.controller import terminal_argv
     monkeypatch.setattr("ffgui.controller.sys",
                         type("S", (), {"platform": "darwin"}))
     hostile = '/tmp/x"; osascript -e \'evil\'; echo "'
@@ -627,7 +592,6 @@ def test_terminal_argv_darwin_passes_path_as_argv(monkeypatch):
 def test_terminal_argv_darwin_guards_leading_dash(monkeypatch):
     """The darwin `do script` string must pass `--` before the path: a dash-led
     save name would otherwise parse as an sh option."""
-    from ffgui.controller import terminal_argv
     monkeypatch.setattr("ffgui.controller.sys",
                         type("S", (), {"platform": "darwin"}))
     argv = terminal_argv("-c")
@@ -637,10 +601,6 @@ def test_terminal_argv_darwin_guards_leading_dash(monkeypatch):
 
 
 def test_restore_state_tolerates_corrupt_geometry(qapp, tmp_path):
-    from PySide6.QtCore import QSettings
-
-    from ffgui.app import _restore_state
-    from ffgui.ui.shell import Shell
     ini = tmp_path / "badgeometry.ini"
     ini.write_text("[General]\ngeometry=junk\n", encoding="utf-8")
     settings = QSettings(str(ini), QSettings.Format.IniFormat)
@@ -650,7 +610,6 @@ def test_restore_state_tolerates_corrupt_geometry(qapp, tmp_path):
 
 
 def test_terminal_argv_linux_guards_leading_dash(monkeypatch):
-    from ffgui.controller import terminal_argv
     monkeypatch.setattr("ffgui.controller.sys",
                         type("S", (), {"platform": "linux"}))
     monkeypatch.setattr("ffgui.controller.shutil.which",
@@ -689,7 +648,6 @@ def test_open_job_file_deep_nesting_surfaced(wired):
 def test_open_job_file_non_dict_meta_falls_back_to_stem(wired):
     """A hand-edited .ffgui with meta as list/str/null must open with the
     file stem as name — AttributeError escaped the except tuple (crash)."""
-    import json
     shell, doc, c, tmp_path = wired
     job = {"inputs": [{"path": "a.mp4"}], "outputs": [{"path": "o.mp4"}]}
     messages = []
@@ -703,12 +661,6 @@ def test_open_job_file_non_dict_meta_falls_back_to_stem(wired):
 
 
 def test_probe_parented_survives_ref_drop(qapp, monkeypatch):
-    import gc
-
-    from PySide6.QtCore import QThread
-
-    from ffgui.app import _launch_probe
-    from ffgui.ui.shell import Shell
     monkeypatch.setattr("ffgui.app._Probe.run", lambda self: self.msleep(800))
     shell = Shell()
     probe = _launch_probe(shell, lambda cap: None, lambda msg: None)
@@ -723,12 +675,7 @@ def test_probe_parented_survives_ref_drop(qapp, monkeypatch):
 def test_reentrant_probe_shares_running_probe(qapp, monkeypatch):
     """A rescan while a probe runs must not launch a second probe: two
     completions would _boot twice, building two Controllers on one shell."""
-    import gc
 
-    from PySide6.QtCore import QThread
-
-    from ffgui.app import _launch_probe
-    from ffgui.ui.shell import Shell
     monkeypatch.setattr("ffgui.app._Probe.run", lambda self: self.msleep(800))
     shell = Shell()
     first = _launch_probe(shell, lambda cap: None, lambda msg: None)
@@ -754,7 +701,6 @@ def test_duplicate_selected_duplicates_each_source_once(wired):
 
 def test_add_files_dialog_adds_chosen_paths(wired, monkeypatch):
     """The File-menu dialog funnels through add_paths (suffix filter applies)."""
-    from PySide6.QtWidgets import QFileDialog
     shell, doc, c, tmp_path = wired
     picked = str(tmp_path / "alpha.mp4")
     monkeypatch.setattr(QFileDialog, "getOpenFileNames",
@@ -765,7 +711,6 @@ def test_add_files_dialog_adds_chosen_paths(wired, monkeypatch):
 
 
 def test_add_folder_dialog_recurses(wired, monkeypatch):
-    from PySide6.QtWidgets import QFileDialog
     shell, doc, c, tmp_path = wired
     sub = tmp_path / "sub"
     sub.mkdir()
@@ -778,7 +723,6 @@ def test_add_folder_dialog_recurses(wired, monkeypatch):
 
 
 def test_concat_parts_dialog_extends_selection(wired, monkeypatch):
-    from PySide6.QtWidgets import QFileDialog
     shell, doc, c, tmp_path = wired
     c.add_paths([str(tmp_path / "alpha.mp4")])
     shell.queue.selectRow(0)
@@ -799,7 +743,6 @@ def test_add_paths_ignores_non_iterable(wired):
 
 
 def test_concat_parts_dialog_needs_single_row(wired, monkeypatch):
-    from PySide6.QtWidgets import QFileDialog
     shell, doc, c, tmp_path = wired
     c.add_paths([str(tmp_path / "alpha.mp4"), str(tmp_path / "beta.mp4")])
     called = []
@@ -812,7 +755,6 @@ def test_concat_parts_dialog_needs_single_row(wired, monkeypatch):
 
 def test_stream_info_dialog_lists_streams(wired, monkeypatch):
     """The dialog must open offscreen without hanging and reflect mapped flags."""
-    from PySide6.QtWidgets import QDialog
     shell, doc, c, tmp_path = wired
     c.add_paths([str(tmp_path / "alpha.mp4")])
     shell.queue.selectRow(0)
@@ -820,15 +762,12 @@ def test_stream_info_dialog_lists_streams(wired, monkeypatch):
     c.stream_info_dialog()
     dialogs = shell.findChildren(QDialog)
     assert dialogs
-    from PySide6.QtWidgets import QCheckBox
     checks = dialogs[-1].findChildren(QCheckBox)
     assert len(checks) == 2 and all(b.isChecked() for b in checks)
 
 
 def test_drop_filter_forwards_local_files(qapp):
     """External drops reach add_paths as local paths (non-local urls ignored)."""
-    from PySide6.QtCore import QEvent, QMimeData, QUrl
-    from ffgui.controller import _DropFilter
     filt = _DropFilter()
     got = []
     filt.pathsDropped.connect(got.extend)
@@ -852,8 +791,6 @@ def test_drop_filter_forwards_local_files(qapp):
 
 def test_preset_dialogs_save_and_delete(wired, monkeypatch):
     """Save dialog stores the selected row; delete removes the listed preset."""
-    from PySide6.QtWidgets import QInputDialog
-    from ffgui.store import load_presets
     shell, doc, c, tmp_path = wired
     c.add_paths([str(tmp_path / "alpha.mp4")])
     shell.queue.selectRow(0)
@@ -869,7 +806,6 @@ def test_preset_dialogs_save_and_delete(wired, monkeypatch):
 
 def test_locator_finds_posix_sibling_without_exe(qapp, tmp_path, monkeypatch):
     """A bundled `ffmpeg` (no .exe) next to the executable counts as found."""
-    from PySide6.QtCore import QSettings
 
     sib = tmp_path / "sibling-ffmpeg"
     (sib / "ffmpeg").parent.mkdir(parents=True, exist_ok=True)
@@ -885,7 +821,6 @@ def test_locator_finds_posix_sibling_without_exe(qapp, tmp_path, monkeypatch):
 def test_faststart_toggle_converges_legacy_slot(wired):
     """Rows written before the slot unification (movflags in video_options)
     converge to the mux slot on the next toggle — no duplicate flag."""
-    from fftui.util.command_builder import build
     shell, doc, c, tmp_path = wired
     c.add_paths([str(tmp_path / "alpha.mp4")])
     shell.queue.selectRow(0)
@@ -898,7 +833,6 @@ def test_faststart_toggle_converges_legacy_slot(wired):
 
 def test_locator_expands_tilde(qapp, tmp_path, monkeypatch):
     """~/ffmpeg in FFMPEG_PATH must resolve via the home directory."""
-    from PySide6.QtCore import QSettings
 
     fake_home = tmp_path / "home"
     fake_home.mkdir()
