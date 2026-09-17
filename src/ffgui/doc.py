@@ -288,7 +288,7 @@ class QueueDocument(QObject):
                        "re-encode for frame-accurate trims")
         if key == "container" and value:
             out.options.pop("f", None)
-        setattr(out, key, value or None)
+        setattr(out, key, value if key == "subtitle_burn_in" else value or None)
         self.touch(row)
         return warning
 
@@ -544,7 +544,7 @@ class QueueDocument(QObject):
             return "row has no output yet"
         out.bsf.clear()
         spec, sep, flt = value.partition("=")
-        if sep:
+        if sep and (not spec or valid_stream_spec(spec)):
             out.bsf[spec or "v:0"] = flt
         elif value:
             out.bsf["v:0"] = value
