@@ -9,7 +9,7 @@ import re
 from fftui.util.command_builder import Sidecar
 
 from ffgui.export.model import (
-    ExportBlock, ScriptHeader, header_comment, reject_hostile,
+    ExportBlock, ScriptHeader, header_comment, reject_hostile, sidecar_parent,
 )
 
 BAT_UNSAFE = frozenset(' \t"\'&|<>^()!`,;=%')
@@ -60,7 +60,8 @@ def _sidecar_lines(car: Sidecar) -> list[str]:
         raise ValueError(f"sidecar {car.path!r} must end with a newline")
     if "\r" in car.content or '"' in car.content:
         raise ValueError(f"sidecar {car.path!r} cannot be represented in a .bat file")
-    lines = [f"> {bat_token(car.path)} ("]
+    parent = bat_token(sidecar_parent(car.path))
+    lines = [f"if not exist {parent} mkdir {parent}", f"> {bat_token(car.path)} ("]
     for line in car.content.split("\n")[:-1]:
         lines.append(f" echo({_cmd_literal(line)}")
     lines.append(")")

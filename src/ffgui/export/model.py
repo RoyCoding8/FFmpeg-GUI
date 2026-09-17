@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import PurePosixPath, PureWindowsPath
 
 from fftui.util.command_builder import Sidecar
 
@@ -51,6 +52,11 @@ def reject_hostile(token: str) -> None:
     for bad in HOSTILE_CHARS:
         if bad in token:
             raise ValueError(f"token contains {bad!r}: {token!r}")
+
+
+def sidecar_parent(path: str) -> str:
+    parsed = PureWindowsPath(path) if PureWindowsPath(path).drive else PurePosixPath(path)
+    return str(parsed.parent)
 
 
 def prune_repeated_sidecars(blocks: list[ExportBlock]) -> list[ExportBlock]:

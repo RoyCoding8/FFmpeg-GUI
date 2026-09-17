@@ -8,7 +8,7 @@ import shlex
 from fftui.util.command_builder import Sidecar
 
 from ffgui.export.model import (
-    ExportBlock, ScriptHeader, header_comment, reject_hostile,
+    ExportBlock, ScriptHeader, header_comment, reject_hostile, sidecar_parent,
 )
 
 _HEREDOC = "FFGUI_EOF"
@@ -22,12 +22,13 @@ def sh_token(token: str) -> str:
 
 
 def _sidecar_lines(car: Sidecar) -> list[str]:
+    lines = [f"mkdir -p {sh_token(sidecar_parent(car.path))}"]
     if not car.content.endswith("\n"):
-        return [f"printf %s {shlex.quote(car.content)} > {sh_token(car.path)}"]
+        return [*lines, f"printf %s {shlex.quote(car.content)} > {sh_token(car.path)}"]
     delim = _HEREDOC
     while delim in car.content:
         delim += "_"
-    return [f"cat > {sh_token(car.path)} <<'{delim}'", *car.content.split("\n")[:-1], delim]
+    return [*lines, f"cat > {sh_token(car.path)} <<'{delim}'", *car.content.split("\n")[:-1], delim]
 
 
 def sh_script(blocks: list[ExportBlock], header: ScriptHeader) -> str:
