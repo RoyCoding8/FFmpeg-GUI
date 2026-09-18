@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-labelledby="title desc">
+  <title id="title">ffgui logo</title>
+  <desc id="desc">A blue film frame with a play symbol</desc>
+  <defs>
+    <linearGradient id="bg" x1="12" y1="8" x2="84" y2="88" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#60A5FA" />
+      <stop offset="1" stop-color="#2563EB" />
+    </linearGradient>
+  </defs>
+  <rect width="96" height="96" rx="24" fill="#1C1C1A" />
+  <rect x="13" y="13" width="70" height="70" rx="18" fill="url(#bg)" />
+  <path d="M29 25v46M67 25v46" fill="none" stroke="#DBEAFE" stroke-width="4" />
+  <path d="M20 34h16M20 48h16M20 62h16M60 34h16M60 48h16M60 62h16" fill="none" stroke="#DBEAFE" stroke-width="4" stroke-linecap="round" />
+  <path d="m43 34 20 14-20 14z" fill="#fff" />
+</svg>
