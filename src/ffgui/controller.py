@@ -1,18 +1,15 @@
-"""The controller: binds QueueDocument ↔ Shell, owns the Basic-tier actions,
-the ffmpeg locator chain, and the export/run flows."""
-
 from __future__ import annotations
 
 import json
 import os
 import re
-import shutil
-import subprocess
+import shutil as shutil
+import subprocess as subprocess
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import (QItemSelection, QItemSelectionModel, QObject,
-                           QSettings, Qt, Signal)
+from PySide6.QtCore import (QEvent, QItemSelection, QItemSelectionModel, QObject,
+                            QSettings, Qt, Signal)
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QDialog, QDialogButtonBox, QFileDialog,
@@ -25,110 +22,86 @@ from fftui.util.command_builder import build, build_two_pass
 
 from ffgui.doc import QueueDocument, QueueItem
 from ffgui.export import script_for_queue
+from ffgui.runtime import (
+    MEDIA_SUFFIXES as MEDIA_SUFFIXES,
+    TARGET_EXT as TARGET_EXT,
+    _LINUX_TERMINALS as _LINUX_TERMINALS,
+    aim_ffmpeg as aim_ffmpeg,
+    launch_script as _launch_script,
+    locate_ffmpeg as _locate_ffmpeg,
+    terminal_argv as _terminal_argv,
+)
 from ffgui.store import delete_preset, fresh_meta, is_truthy, load_presets, save_preset
 from ffgui.ui import icons
 from ffgui.ui.shell import Shell, mark_invalid
 from ffgui.ui.tabs import build_tabs, wrap_scroll
 
-MEDIA_SUFFIXES = {".mp4", ".mkv", ".webm", ".mov", ".avi", ".ts", ".m4v", ".mpg",
-                  ".mp3", ".m4a", ".wav", ".flac", ".ogg", ".opus", ".aac", ".wma",
-                  ".srt", ".ass", ".vtt", ".jpg", ".png"}
 _BARE_NEGATIVE_RE = re.compile(r"-\d*\.?\d+")
-TARGET_EXT = {"bat": ".bat", "sh": ".sh"}
-_LINUX_TERMINALS = (("x-terminal-emulator", "-e"), ("gnome-terminal", "--"),
-                    ("konsole", "-e"), ("xfce4-terminal", "-x"),
-                    ("mate-terminal", "--"), ("xterm", "-e"))
-# Tab "advanced" kinds that route straight to a QueueDocument setter.
-_ADVANCED_EDITS = {
-    "filters": lambda doc, row, key, v: doc.set_filters(row, key, v.split("\n") if v else []),
-    "chapters": lambda doc, row, key, v: doc.set_chapters(row, v),
-    "burn": lambda doc, row, key, v: doc.set_output_field(row, "subtitle_burn_in", v),
-    "faststart": lambda doc, row, key, v: doc.set_faststart(row, v),
-    "hwdecode": lambda doc, row, key, v: doc.set_hw_decode(row, v),
-    "hwdevice": lambda doc, row, key, v: doc.set_option(row, "global", "filter_hw_device", v),
-    "segment": lambda doc, row, key, v: doc.set_segment_enabled(row, v),
-    "segment_time": lambda doc, row, key, v: doc.set_output_field(row, "segment_time", v),
-    "bsf": lambda doc, row, key, v: doc.set_bsf(row, v),
-    "tee": lambda doc, row, key, v: doc.set_tee(row, v),
-    "input": lambda doc, row, key, v: doc.set_input_arg(row, key, v),
-}
+_NO_OUTPUT_KINDS = ("codec", "option", "field", "flag", "hwdecode", "input")
+
 
 def terminal_argv(path: str) -> list[str] | None:
-    """Argv opening *path* in a fresh terminal. *path* never enters a parsed
-    string: Linux execs it after ``--``; macOS passes it via ``quoted form of``."""
-    if sys.platform == "darwin":
-        return ["osascript", "-e",
-                'on run argv\ntell app "Terminal" to do script '
-                '"sh -- " & quoted form of (item 1 of argv)\nend run',
-                path]
-    for exe, flag in _LINUX_TERMINALS:
-        if shutil.which(exe):
-            return [exe, flag, "sh", "--", path]
-    return None
+    return _terminal_argv(path, platform=sys.platform)
+
 
 def launch_script(path: str) -> None:
-    """Run *path* detached, exactly as if the user double-clicked it. The
-    format follows the file suffix (run_terminal lets the suffix override the
-    OS default), never the platform: a .bat fed to ``sh --`` parses cmd.exe
-    syntax line by line, so refuse it off Windows instead."""
-    if Path(path).suffix.lower() == ".bat":
-        if sys.platform != "win32":
-            raise RuntimeError(
-                f"cannot launch {path} here — .bat scripts need Windows "
-                "(export a .sh script to run on this machine)")
-        os.startfile(path)
-        return
-    if sys.platform == "win32":
-        os.startfile(path)
-        return
-    argv = terminal_argv(path)
-    if argv is None:
-        raise RuntimeError("no terminal emulator found — run the saved script manually")
-    subprocess.Popen(argv, start_new_session=True, stdin=subprocess.DEVNULL,
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    _launch_script(path, platform=sys.platform, resolver=terminal_argv)
+
+
+def locate_ffmpeg(settings: QSettings) -> tuple[str | None, bool]:
+    return _locate_ffmpeg(settings, executable=sys.executable)
+
+
+def _apply_volume(doc: QueueDocument, kind: str, row: int, value: str) -> str | None:
+    keep = [f for f in doc.items[row].job.audio_filters.filters
+            if f != kind and not f.startswith(f"{kind}=")]
+    if kind == "loudnorm":
+        if is_truthy(value):
+            keep.append("loudnorm=I=-16:TP=-1.5:LRA=11")
+    elif value:
+        gain = f"{value}dB" if _BARE_NEGATIVE_RE.fullmatch(value) else value
+        keep.append(f"volume={gain}")
+    return doc.set_filters(row, "audio_filters", keep)
+
+
+_EDITS = {
+    "codec": lambda c, r, k, v: c.doc.set_codec(r, k, v),
+    "option": lambda c, r, k, v: c._apply_option(r, k, v),
+    "field": lambda c, r, k, v: c._apply_field(r, k, v),
+    "flag": lambda c, r, k, v: c._apply_flag(r, k, v),
+    "filters": lambda c, r, k, v: c.doc.set_filters(r, k, v.split("\n") if v else []),
+    "chapters": lambda c, r, k, v: c.doc.set_chapters(r, v),
+    "burn": lambda c, r, k, v: c.doc.set_output_field(r, "subtitle_burn_in", v),
+    "faststart": lambda c, r, k, v: c.doc.set_faststart(r, v),
+    "hwdecode": lambda c, r, k, v: c.doc.set_hw_decode(r, v),
+    "hwdevice": lambda c, r, k, v: c.doc.set_option(r, "global", "filter_hw_device", v),
+    "segment": lambda c, r, k, v: c.doc.set_segment_enabled(r, v),
+    "segment_time": lambda c, r, k, v: c.doc.set_output_field(r, "segment_time", v),
+    "bsf": lambda c, r, k, v: c.doc.set_bsf(r, v),
+    "tee": lambda c, r, k, v: c.doc.set_tee(r, v),
+    "input": lambda c, r, k, v: c.doc.set_input_arg(r, k, v),
+    "volume": lambda c, r, k, v: _apply_volume(c.doc, "volume", r, v),
+    "loudnorm": lambda c, r, k, v: _apply_volume(c.doc, "loudnorm", r, v),
+    "streamtag": lambda c, r, k, v: c._apply_streamtag(r),
+}
+
 
 class _DropFilter(QObject):
-    """External file/folder drops onto the queue or the empty-state card."""
-
     pathsDropped = Signal(list)
 
     def eventFilter(self, obj, event) -> bool:
-        from PySide6.QtCore import QEvent
-        if event.type() in (QEvent.Type.DragEnter, QEvent.Type.DragMove) \
-                and event.mimeData().hasUrls():
+        t = event.type()
+        if t in (QEvent.Type.DragEnter, QEvent.Type.DragMove) and event.mimeData().hasUrls():
             event.acceptProposedAction()
             return True
-        if event.type() == QEvent.Type.Drop and event.mimeData().hasUrls():
-            paths = [url.toLocalFile() for url in event.mimeData().urls()
-                     if url.isLocalFile()]
+        if t == QEvent.Type.Drop and event.mimeData().hasUrls():
+            paths = [u.toLocalFile() for u in event.mimeData().urls() if u.isLocalFile()]
             if paths:
                 self.pathsDropped.emit(paths)
             event.acceptProposedAction()
             return True
         return False
 
-def locate_ffmpeg(settings: QSettings) -> tuple[str | None, bool]:
-    """Locator chain FFMPEG_PATH → last-good setting → PATH → sibling ffmpeg.exe;
-    returns (explicit_path, found)."""
-    for candidate in (os.environ.get("FFMPEG_PATH", "").strip(),
-                      str(settings.value("ffmpeg_path", "") or "").strip()):
-        if candidate:
-            resolved = Path(os.path.expanduser(os.path.expandvars(candidate)))
-            if resolved.is_file():
-                return str(resolved), True
-    if shutil.which("ffmpeg"):
-        return None, True
-    sibling_dir = Path(sys.executable).parent
-    for name in ("ffmpeg.exe", "ffmpeg"):
-        sibling = sibling_dir / name
-        if sibling.is_file():
-            return str(sibling), True
-    return None, False
-
-def aim_ffmpeg(path: str | None) -> None:
-    """Route fftui's runtime at a located binary that is not on PATH."""
-    if path:
-        os.environ["FFTUI_FFMPEG_DIR"] = str(Path(path).parent)
 
 class Controller(QObject):
     status = Signal(str)
@@ -136,55 +109,45 @@ class Controller(QObject):
     def __init__(self, shell: Shell, doc: QueueDocument, cap: CapabilityIndex,
                  settings: QSettings) -> None:
         super().__init__(shell)
-        self.shell = shell
-        self.doc = doc
-        self.cap = cap
-        self.settings = settings
+        self.shell, self.doc, self.cap, self.settings = shell, doc, cap, settings
         self.tabs = build_tabs(cap)
         self._last_rows: list[int] | None = None
-        self._basic_edits = {"codec": self.doc.set_codec, "option": self._apply_option,
+        self._basic_edits = {"codec": doc.set_codec, "option": self._apply_option,
                              "field": self._apply_field, "flag": self._apply_flag}
-        for page in self.tabs.values():
-            expert = getattr(page, "expert", None)
-            if expert is not None:
-                expert.optionCommitted.connect(self._on_expert_committed)
-                expert.statusMessage.connect(
-                    lambda msg: shell.statusBar().showMessage(msg, 8000))
         current_tab = shell.tabs.currentIndex()
         while shell.tabs.count():
             shell.tabs.widget(0).deleteLater()
             shell.tabs.removeTab(0)
         for name, page in self.tabs.items():
+            if (expert := getattr(page, "expert", None)) is not None:
+                expert.optionCommitted.connect(self._on_expert_committed)
+                expert.statusMessage.connect(lambda m: shell.statusBar().showMessage(m, 8000))
             page.edit.connect(self._on_tab_edit)
             shell.tabs.addTab(wrap_scroll(page), name)
         shell.tabs.setCurrentIndex(current_tab)
-        self._wire()
 
-    def _wire(self) -> None:
-        s = self.shell
-        s.add_actions(self.add_files_dialog, self.add_folder_dialog)
-        s.export_btn.clicked.connect(lambda checked=False: self.export_dialog())
-        s.run_btn.clicked.connect(self.run_terminal)
-        s.empty.add_files_requested.connect(self.add_files_dialog)
-        s.queue.itemSelectionChanged.connect(self._on_selection)
-        s.queue.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        s.queue.customContextMenuRequested.connect(self._context_menu)
+        shell.add_actions(self.add_files_dialog, self.add_folder_dialog)
+        shell.export_btn.clicked.connect(lambda _=False: self.export_dialog())
+        shell.run_btn.clicked.connect(self.run_terminal)
+        shell.empty.add_files_requested.connect(self.add_files_dialog)
+        shell.queue.itemSelectionChanged.connect(self._on_selection)
+        shell.queue.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        shell.queue.customContextMenuRequested.connect(self._context_menu)
         dropper = _DropFilter(self)
         dropper.pathsDropped.connect(self.add_paths)
-        s.queue.setAcceptDrops(True)
-        s.queue.viewport().installEventFilter(dropper)
-        s.empty.installEventFilter(dropper)
-        s.preset_list.itemDoubleClicked.connect(
-            lambda item: self.apply_preset(item.text()))
-        s.preset_save.clicked.connect(self.save_preset_dialog)
-        s.preset_delete.clicked.connect(self.delete_preset)
-        remove = QAction("Remove selected", s.queue)
+        shell.queue.setAcceptDrops(True)
+        shell.queue.viewport().installEventFilter(dropper)
+        shell.empty.installEventFilter(dropper)
+        shell.preset_list.itemDoubleClicked.connect(lambda it: self.apply_preset(it.text()))
+        shell.preset_save.clicked.connect(self.save_preset_dialog)
+        shell.preset_delete.clicked.connect(self.delete_preset)
+        remove = QAction("Remove selected", shell.queue)
         remove.setShortcuts([QKeySequence(Qt.Key.Key_Delete),
                              QKeySequence(Qt.Key.Key_Backspace)])
         remove.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         remove.triggered.connect(self.remove_selected)
-        s.queue.addAction(remove)
-        self.status.connect(lambda text: s.statusBar().showMessage(text, 8000))
+        shell.queue.addAction(remove)
+        self.status.connect(lambda text: shell.statusBar().showMessage(text, 8000))
         self.refresh_presets()
         self.refresh()
 
@@ -192,51 +155,38 @@ class Controller(QObject):
         table = self.shell.queue
         table.setRowCount(len(self.doc))
         for row, item in enumerate(self.doc.items):
-            table.setItem(row, 0, self._status_cell(item))
+            status = QTableWidgetItem(
+                icons.icon("triangle-alert" if item.error else "check"), "")
+            status.setToolTip(item.error or item.meta["notes"] or "ready")
+            table.setItem(row, 0, status)
             inp = item.job.inputs[0] if item.job.inputs else None
-            video = next((s for s in (inp.streams if inp else [])
-                          if s.codec_type == "video"), None)
+            video = next((s for s in (inp.streams if inp else ()) if s.codec_type == "video"), None)
+            out = item.job.outputs[0] if item.job.outputs else None
+            codecs = (" · ".join(p for p in (out.video_codec, out.audio_codec, out.subtitle_codec) if p)
+                      if out else "")
             cells = (
                 item.meta["name"],
                 f"{video.width}×{video.height}" if video and video.width else "",
-                self._codec_summary(item),
-                Path(item.job.outputs[0].path).name if item.job.outputs else "",
+                codecs,
+                Path(out.path).name if out else "",
             )
             for col, text in enumerate(cells, start=1):
                 cell = QTableWidgetItem(text)
-                if col == 4 and item.job.outputs:
-                    cell.setToolTip(item.job.outputs[0].path)
+                if col == 4 and out:
+                    cell.setToolTip(out.path)
                 table.setItem(row, col, cell)
         self.shell.show_empty(len(self.doc) == 0)
         self._on_selection()
-
-    def _status_cell(self, item) -> QTableWidgetItem:
-        if item.error:
-            cell = QTableWidgetItem(icons.icon("triangle-alert"), "")
-            cell.setToolTip(item.error)
-        else:
-            cell = QTableWidgetItem(icons.icon("check"), "")
-            cell.setToolTip(item.meta["notes"] or "ready")
-        return cell
-
-    def _codec_summary(self, item) -> str:
-        out = item.job.outputs[0] if item.job.outputs else None
-        if out is None:
-            return ""
-        parts = [out.video_codec or "", out.audio_codec or "", out.subtitle_codec or ""]
-        return " · ".join(p for p in parts if p)
 
     def selected_rows(self) -> list[int]:
         return sorted({i.row() for i in self.shell.queue.selectedIndexes()})
 
     def _select_rows(self, rows) -> None:
-        """Select exactly these rows in one selection: selectRow replaces the
-        current selection, so looping it keeps only the last row."""
         model = self.shell.queue.model()
         selection = QItemSelection()
         for row in rows:
-            index = model.index(row, 0)
-            selection.select(index, index)
+            idx = model.index(row, 0)
+            selection.select(idx, idx)
         self.shell.queue.selectionModel().select(
             selection, QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows)
 
@@ -251,8 +201,7 @@ class Controller(QObject):
             self.shell.preview.setPlainText("")
             return
         item = self.doc.items[rows[0]]
-        out, job = ((item.job.outputs[0], item.job) if item.job.outputs
-                    else (Output(path=""), Job()))
+        out, job = ((item.job.outputs[0], item.job) if item.job.outputs else (Output(path=""), Job()))
         for page in self.tabs.values():
             page.populate(out, job)
         self._update_preview()
@@ -264,13 +213,12 @@ class Controller(QObject):
             return
         chunks = []
         for row in rows:
-            item = self.doc.items[row]
+            job = self.doc.items[row].job
             try:
-                if item.job.two_pass:
-                    argvs = build_two_pass(item.job)
-                    chunks.append(" &&\n".join(" ".join(a) for a in argvs))
+                if job.two_pass:
+                    chunks.append(" &&\n".join(" ".join(a) for a in build_two_pass(job)))
                 else:
-                    chunks.append(" ".join(build(item.job)))
+                    chunks.append(" ".join(build(job)))
             except Exception as exc:
                 chunks.append(f"# {type(exc).__name__}: {exc}")
         self.shell.preview.setPlainText("\n\n".join(chunks))
@@ -279,11 +227,9 @@ class Controller(QObject):
         rows = self.selected_rows()
         if not rows:
             return
-        handler = self._basic_edits.get(kind) if isinstance(kind, str) else None
         error = None
         for row in rows:
-            error = (handler(row, key, value) if handler
-                     else self._apply_advanced(kind, key, value, row)) or error
+            error = self._apply_edit(kind, key, value, row) or error
         if error:
             widget = self.shell.tabs.currentWidget().focusWidget()
             if isinstance(widget, QLineEdit):
@@ -292,24 +238,19 @@ class Controller(QObject):
         self.refresh()
 
     def _on_expert_committed(self, kind: str, component: str, opt, value: str) -> None:
-        """Expert commits refresh the queue/preview like tab edits; errors go loud."""
-        error = self._apply_expert(kind, component, opt, value)
-        if error:
+        if error := self._apply_expert(kind, component, opt, value):
             self.status.emit(error)
         self.refresh()
 
     def _apply_expert(self, kind: str, component: str, opt, value: str) -> str | None:
-        """Route a committed Expert AVOption to its Job slot (never bare filter argv)."""
         rows = self.selected_rows()
         if not rows:
             return "select a queue row first"
         row = rows[0]
         if kind == "filter":
-            stream = ("audio_filters" if self.cap.filter_kind(component) == "audio"
-                      else "video_filters")
-            job = self.doc.items[row].job
+            stream = "audio_filters" if self.cap.filter_kind(component) == "audio" else "video_filters"
             prefix = f"{component}={opt.name}"
-            chain = [f for f in getattr(job, stream).filters
+            chain = [f for f in getattr(self.doc.items[row].job, stream).filters
                      if f != prefix and not f.startswith(f"{prefix}=")]
             if value:
                 chain.append(f"{prefix}={value}")
@@ -324,30 +265,17 @@ class Controller(QObject):
             return self.doc.set_bsf(row, value or component or "")
         return self.doc.set_input_arg(row, f"-{opt.name}", value)
 
-    def _apply_advanced(self, kind: str, key: str, value: str, row: int) -> str | None:
+    def _apply_edit(self, kind: str, key: str, value: str, row: int) -> str | None:
         if not isinstance(row, int) or not 0 <= row < len(self.doc):
             return f"no such row {row}"
-        value = value if isinstance(value, str) else ""
-        job = self.doc.items[row].job
-        if not job.outputs and kind not in ("hwdecode", "input"):
+        if not self.doc.items[row].job.outputs and kind not in _NO_OUTPUT_KINDS:
             return "row has no output yet"
-        if kind in ("volume", "loudnorm"):
-            return self._apply_volume(kind, row, value)
-        if kind == "streamtag":
-            return self._apply_streamtag(row)
-        edit = _ADVANCED_EDITS.get(kind) if isinstance(kind, str) else None
-        return edit(self.doc, row, key, value) if edit else f"unknown edit {kind!r}"
+        edit = _EDITS.get(kind) if isinstance(kind, str) else None
+        if edit is None:
+            return f"unknown edit {kind!r}"
+        return edit(self, row, key, value if isinstance(value, str) else "")
 
-    def _apply_volume(self, kind: str, row: int, value: str) -> str | None:
-        keep = [f for f in self.doc.items[row].job.audio_filters.filters
-                if f != kind and not f.startswith(kind + "=")]
-        if kind == "loudnorm":
-            if is_truthy(value):
-                keep.append("loudnorm=I=-16:TP=-1.5:LRA=11")
-        elif value:
-            gain = f"{value}dB" if _BARE_NEGATIVE_RE.fullmatch(value) else value
-            keep.append(f"volume={gain}")
-        return self.doc.set_filters(row, "audio_filters", keep)
+    _apply_advanced = _apply_edit
 
     def _apply_streamtag(self, row: int) -> str | None:
         meta = self.tabs["Metadata"]
@@ -356,16 +284,16 @@ class Controller(QObject):
             return "enter a stream spec (e.g. v:0) and a language tag"
         return self.doc.set_stream_meta(row, spec, "language", lang)
 
-    def _apply_option(self, row, key, value):
+    def _apply_option(self, row: int, key: str, value: str) -> str | None:
         scope, _, real = (key if isinstance(key, str) else "").partition(":")
         return self.doc.set_option(row, scope, real, value)
 
-    def _apply_field(self, row, key, value):
+    def _apply_field(self, row: int, key: str, value: str) -> str | None:
         if key in ("title", "comment"):
             return self.doc.set_metadata(row, key, value)
         return self.doc.set_output_field(row, key, value)
 
-    def _apply_flag(self, row, key, value):
+    def _apply_flag(self, row: int, key: str, value: str) -> str | None:
         if not isinstance(row, int) or not 0 <= row < len(self.doc):
             return f"no such row {row}"
         return self.doc.set_flag(row, key, value if isinstance(value, str) else "")
@@ -376,21 +304,21 @@ class Controller(QObject):
             return
         if isinstance(paths, (str, os.PathLike)):
             paths = [paths]
-        if not paths:
-            return
         try:
-            paths = list(paths)
+            items = list(paths) if paths else []
         except TypeError:
             return
         files: list[str] = []
-        for raw in paths:
+        for raw in items:
             if not isinstance(raw, (str, os.PathLike)):
                 continue
             p = Path(raw)
             if p.is_dir():
-                source = p.rglob("*") if recursive else p.iterdir()
-                found = sorted(str(f) for f in source if f.suffix.lower() in MEDIA_SUFFIXES)
-                files += found
+                found = sorted(
+                    str(f) for f in (p.rglob("*") if recursive else p.iterdir())
+                    if f.suffix.lower() in MEDIA_SUFFIXES
+                )
+                files.extend(found)
                 if recursive:
                     self.status.emit(f"{p.name}: {len(found)} media files")
             else:
@@ -404,13 +332,11 @@ class Controller(QObject):
         self.add_paths(paths)
 
     def add_folder_dialog(self) -> None:
-        folder = QFileDialog.getExistingDirectory(self.shell, "Add folder")
-        if folder:
+        if folder := QFileDialog.getExistingDirectory(self.shell, "Add folder"):
             self.add_paths([folder], recursive=True)
 
     def remove_selected(self) -> None:
-        rows = self.selected_rows()
-        if rows:
+        if rows := self.selected_rows():
             self.doc.remove_rows(rows)
             self.refresh()
 
@@ -440,8 +366,7 @@ class Controller(QObject):
         paths, _ = QFileDialog.getOpenFileNames(self.shell, "Join parts (lossless concat)")
         if not paths:
             return
-        error = self.doc.join_parts(rows[0], paths)
-        if error:
+        if error := self.doc.join_parts(rows[0], paths):
             self.status.emit(error)
             return
         self.refresh()
@@ -449,15 +374,12 @@ class Controller(QObject):
 
     def _context_menu(self, pos) -> None:
         menu = QMenu(self.shell)
-        for label, handler in (
-            ("&Duplicate", self.duplicate_selected),
-            ("&Remove", self.remove_selected),
-            ("Move &up", lambda: self.move_selected(-1)),
-            ("Move &down", lambda: self.move_selected(1)),
-            ("&Join parts…", self.concat_parts_dialog),
-            ("Stream &info…", self.stream_info_dialog),
+        for label, fn in (
+            ("&Duplicate", self.duplicate_selected), ("&Remove", self.remove_selected),
+            ("Move &up", lambda: self.move_selected(-1)), ("Move &down", lambda: self.move_selected(1)),
+            ("&Join parts…", self.concat_parts_dialog), ("Stream &info…", self.stream_info_dialog),
         ):
-            menu.addAction(label, handler)
+            menu.addAction(label, fn)
         menu.exec(self.shell.queue.viewport().mapToGlobal(pos))
 
     def stream_info_dialog(self) -> None:
@@ -473,12 +395,12 @@ class Controller(QObject):
         dialog = QDialog(self.shell)
         dialog.setWindowTitle(f"Streams — {Path(inp.path).name}")
         col = QVBoxLayout(dialog)
-        for stream in inp.streams:
-            box = QCheckBox(f"{stream.spec}  {stream.codec_name or '?'}  "
-                            f"{stream.width or stream.sample_rate or ''}"
-                            f"{'×' + str(stream.height) if stream.height else ''}")
-            box.setChecked(stream.mapped)
-            box.toggled.connect(lambda on, s=stream: setattr(s, "mapped", on))
+        for s in inp.streams:
+            box = QCheckBox(
+                f"{s.spec}  {s.codec_name or '?'}  "
+                f"{s.width or s.sample_rate or ''}{f'×{s.height}' if s.height else ''}")
+            box.setChecked(s.mapped)
+            box.toggled.connect(lambda on, st=s: setattr(st, "mapped", on))
             col.addWidget(box)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(dialog.reject)
@@ -511,13 +433,13 @@ class Controller(QObject):
         if not rows:
             self.status.emit("select a row to apply the preset to")
             return
-        presets = load_presets()
-        if name not in presets:
+        preset = load_presets().get(name)
+        if preset is None:
             return
-        preset_job, _ = presets[name]
+        preset_dict = preset[0].to_dict()
         for row in rows:
             item = self.doc.items[row]
-            job = Job.from_dict(preset_job.to_dict())
+            job = Job.from_dict(preset_dict)
             if item.job.inputs and job.inputs:
                 job.inputs[0] = item.job.inputs[0]
             for out, target in zip(job.outputs, item.job.outputs):
@@ -528,20 +450,17 @@ class Controller(QObject):
         self.refresh()
 
     def delete_preset(self) -> None:
-        item = self.shell.preset_list.currentItem()
-        if item:
+        if item := self.shell.preset_list.currentItem():
             delete_preset(item.text())
             self.refresh_presets()
 
     def open_job_file(self, path: str) -> None:
-        """Open a double-clicked .ffgui exchange file into the queue."""
         try:
             data = json.loads(Path(path).read_text(encoding="utf-8"))
             job = Job.from_dict(data["job"])
         except (OSError, ValueError, KeyError, TypeError, RecursionError) as exc:
             self.status.emit(f"invalid job file: {exc}")
             return
-
         meta_raw = data.get("meta", {})
         meta_name = meta_raw.get("name") if isinstance(meta_raw, dict) else None
         self.doc.items.append(QueueItem(job, fresh_meta(meta_name or Path(path).stem)))
@@ -552,40 +471,32 @@ class Controller(QObject):
         return [it.job for it in self.doc.items
                 if it.meta["enabled"] and it.job.inputs and it.job.outputs]
 
-    def _target(self) -> str:
-        return "bat" if self.shell.format.currentIndex() == 0 else "sh"
-
     def _save_script(self, title: str, message: str, target: str, one_file: bool) -> str:
-        """Shared export flow: gate on enabled jobs, prompt for a destination,
-        export there. Returns the written path, or "" when the user cancelled
-        or the failure was surfaced. The save-dialog suffix overrides *target*."""
         jobs = self._enabled_jobs()
         if not jobs:
             self.status.emit(message)
             return ""
         stem = Path(jobs[0].outputs[0].path).stem if len(jobs) == 1 else "convert"
-        path, _ = QFileDialog.getSaveFileName(self.shell, title,
-                                              f"{stem}{TARGET_EXT[target]}")
+        path, _ = QFileDialog.getSaveFileName(self.shell, title, f"{stem}{TARGET_EXT[target]}")
         if not path:
             return ""
         suffix = Path(path).suffix.lower()
         if suffix in TARGET_EXT.values():
             target = "bat" if suffix == ".bat" else "sh"
         try:
-            written = self.export_to(path, target, one_file)
+            return self.export_to(path, target, one_file)
         except Exception as exc:
             self.status.emit(f"export failed — {exc}")
             return ""
-        return written
 
     def export_dialog(self, one_file: bool = True) -> None:
-        written = self._save_script("Export script", "nothing to export — add media first",
-                                    self._target(), one_file)
-        if written:
+        target = "bat" if self.shell.format.currentIndex() == 0 else "sh"
+        if written := self._save_script(
+            "Export script", "nothing to export — add media first", target, one_file
+        ):
             self.status.emit(f"Exported {written}")
 
     def run_terminal(self) -> None:
-        """Save the script where the user chooses, then launch it natively, detached."""
         path = self._save_script("Save and run script", "nothing to run — add media first",
                                  "bat" if os.name == "nt" else "sh", True)
         if not path:
@@ -601,26 +512,19 @@ class Controller(QObject):
         if not isinstance(path, (str, os.PathLike)):
             raise ValueError(f"export path must be a string, got {type(path).__name__}")
         jobs = self._enabled_jobs()
-        hash_ = self.cap.version_hash
+        result = script_for_queue(jobs, target, self.cap.version_hash, one_file=one_file)
         if one_file:
-            text = script_for_queue(jobs, target, hash_, one_file=True)
-            Path(path).write_bytes(text.encode("utf-8"))
+            Path(path).write_bytes(result.encode("utf-8"))
             return path
-        scripts = script_for_queue(jobs, target, hash_, one_file=False)
-        written = ""
-        used: set[str] = set()
-        for job, text in zip(jobs, scripts):
-            out = Path(path)
-            if len(jobs) > 1:
-                root = Path(path)
-                out = root.with_suffix("").with_name(
-                    f"{root.stem}_{Path(job.outputs[0].path).stem}{TARGET_EXT[target]}")
-                n = 2
+        root, ext, written, used = Path(path), TARGET_EXT[target], "", set()
+        for job, text in zip(jobs, result):
+            if len(jobs) == 1:
+                out = root
+            else:
+                base = f"{root.stem}_{Path(job.outputs[0].path).stem}"
+                out, n = root.with_name(f"{base}{ext}"), 2
                 while str(out).lower() in used:
-                    out = root.with_suffix("").with_name(
-                        f"{root.stem}_{Path(job.outputs[0].path).stem}_{n}"
-                        f"{TARGET_EXT[target]}")
-                    n += 1
+                    out, n = root.with_name(f"{base}_{n}{ext}"), n + 1
             used.add(str(out).lower())
             out.write_bytes(text.encode("utf-8"))
             written = str(out)

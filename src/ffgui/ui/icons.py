@@ -1,5 +1,3 @@
-"""Lucide icons (ISC) rendered from checked-in SVGs, tinted to the active theme."""
-
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
@@ -25,11 +23,9 @@ def _text_color() -> str:
 
 
 def svg_source(name: str, color: str) -> str:
-    """The SVG file text with the stroke bound to *color* ("" when unreadable)."""
     try:
-        base = ASSETS.resolve()
         path = (ASSETS / f"{name}.svg").resolve()
-        if path.parent != base:
+        if path.parent != ASSETS.resolve():
             return ""
         text = path.read_text(encoding="utf-8")
         ET.fromstring(text)
@@ -44,8 +40,7 @@ def icon(name: str, color: str | None = None, size: int = 16) -> QIcon:
     source = svg_source(name, color or _text_color())
     if not source:
         return result
-    raw = source.encode("utf-8")
-    renderer = QSvgRenderer(QByteArray(raw))
+    renderer = QSvgRenderer(QByteArray(source.encode("utf-8")))
     for scale in (1, 2):
         pm = QPixmap(size * scale, size * scale)
         pm.fill(Qt.GlobalColor.transparent)

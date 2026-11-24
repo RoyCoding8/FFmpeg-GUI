@@ -1,6 +1,3 @@
-"""The application shell: sidebar | queue / tabs / preview | bottom bar, plus the
-six required states as real widgets. Feature wiring lands on this skeleton."""
-
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
@@ -8,7 +5,7 @@ from PySide6.QtGui import QAction, QGuiApplication, QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
-    QStackedWidget, QSplitter, QTableWidget, QTabWidget, QVBoxLayout, QWidget,
+    QSplitter, QStackedWidget, QTableWidget, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from ffgui.ui import icons
@@ -32,9 +29,17 @@ def _btn(text: str, *, variant: str | None = None, icon_name: str | None = None,
     return b
 
 
-class EmptyState(QFrame):
-    """The no-inputs state: illustrated drop target over the queue region."""
+def _lbl(text: str = "", *, obj: str | None = None,
+         align: Qt.AlignmentFlag | None = None) -> QLabel:
+    lbl = QLabel(text)
+    if obj:
+        lbl.setObjectName(obj)
+    if align is not None:
+        lbl.setAlignment(align)
+    return lbl
 
+
+class EmptyState(QFrame):
     add_files_requested = Signal()
 
     def mousePressEvent(self, event) -> None:
@@ -47,22 +52,16 @@ class EmptyState(QFrame):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         inner = QVBoxLayout(self)
         inner.setContentsMargins(SPACING[4], SPACING[5], SPACING[4], SPACING[5])
+        center = Qt.AlignmentFlag.AlignCenter
         pic = QLabel(pixmap=icons.icon("film", size=36).pixmap(36, 36))
-        pic.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        head = QLabel("No media yet")
-        head.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        head.setObjectName("title")
-        sub = QLabel("Drop media files or folders here — or click to browse")
-        sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        sub.setObjectName("secondary")
+        pic.setAlignment(center)
         inner.addWidget(pic)
-        inner.addWidget(head)
-        inner.addWidget(sub)
+        inner.addWidget(_lbl("No media yet", obj="title", align=center))
+        inner.addWidget(_lbl("Drop media files or folders here — or click to browse",
+                             obj="secondary", align=center))
 
 
 class NoFfmpegPage(QWidget):
-    """The locator state: rescan PATH, browse, manual entry, remembered."""
-
     accepted = Signal(str)
 
     def __init__(self) -> None:
@@ -70,9 +69,7 @@ class NoFfmpegPage(QWidget):
         col = QVBoxLayout(self)
         col.setContentsMargins(*(SPACING[6],) * 4)
         col.addStretch(1)
-        head = QLabel("ffmpeg not found")
-        head.setObjectName("windowTitle")
-        col.addWidget(head)
+        col.addWidget(_lbl("ffmpeg not found", obj="windowTitle"))
         col.addWidget(QLabel("ffgui needs an ffmpeg binary. It is never bundled — "
                              "point at your build (PATH, FFMPEG_PATH, or a folder)."))
         row = QHBoxLayout()
@@ -84,51 +81,42 @@ class NoFfmpegPage(QWidget):
         entry = QHBoxLayout()
         self.manual = QLineEdit()
         self.manual.setPlaceholderText("…or paste the full path to ffmpeg here")
-        entry.addWidget(self.manual)
         self.remember = QCheckBox("Remember this location")
         self.remember.setChecked(True)
+        entry.addWidget(self.manual)
         entry.addWidget(self.remember)
         col.addLayout(entry)
-        self.status = QLabel("")
-        self.status.setObjectName("statusError")
+        self.status = _lbl("", obj="statusError")
         col.addWidget(self.status)
         col.addStretch(2)
         self.manual.editingFinished.connect(self._commit_manual)
 
     def _commit_manual(self) -> None:
-        path = self.manual.text().strip()
-        if path:
+        if path := self.manual.text().strip():
             self.accepted.emit(path)
 
 
 class LoadingPage(QWidget):
-    """The capability-probe state: progress with a cancel affordance."""
-
     cancelled = Signal()
 
     def __init__(self) -> None:
         super().__init__()
         col = QVBoxLayout(self)
         col.addStretch(1)
-        head = QLabel("Reading your ffmpeg build")
-        head.setObjectName("windowTitle")
-        head.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        col.addWidget(head)
-        self.detail = QLabel(" ")
-        self.detail.setObjectName("secondary")
-        self.detail.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        center = Qt.AlignmentFlag.AlignCenter
+        col.addWidget(_lbl("Reading your ffmpeg build", obj="windowTitle", align=center))
+        self.detail = _lbl(" ", obj="secondary", align=center)
         col.addWidget(self.detail)
         self.bar = QProgressBar()
         self.bar.setRange(0, 0)
         col.addWidget(self.bar)
         cancel = _btn("Cancel", icon_name="x")
         cancel.clicked.connect(self.cancelled)
-        col.addWidget(cancel, alignment=Qt.AlignmentFlag.AlignCenter)
+        col.addWidget(cancel, alignment=center)
         col.addStretch(2)
 
 
 def error_modal(parent: QWidget, title: str, details: str) -> None:
-    """error-modal state: message box with a Copy details affordance."""
     box = QMessageBox(parent)
     box.setIcon(QMessageBox.Icon.Critical)
     box.setWindowTitle(title)
@@ -146,7 +134,6 @@ def error_modal(parent: QWidget, title: str, details: str) -> None:
 
 
 def mark_invalid(line_edit: QLineEdit, message: str | None) -> None:
-    """invalid-option state: inline red + tooltip; commit is blocked by the caller."""
     line_edit.setProperty("invalid", message is not None)
     line_edit.setToolTip(message or "")
     line_edit.style().unpolish(line_edit)
@@ -154,8 +141,6 @@ def mark_invalid(line_edit: QLineEdit, message: str | None) -> None:
 
 
 class Shell(QMainWindow):
-    """Region map: sidebar | queue / tabs / preview | bottomBar, in a state stack."""
-
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("ffgui — FFmpeg command compiler")
@@ -168,6 +153,7 @@ class Shell(QMainWindow):
         self.bottom_bar = self._bottom_bar()
 
         center = QWidget()
+        center.setMinimumWidth(420)
         col = QVBoxLayout(center)
         col.setContentsMargins(SPACING[2], SPACING[2], SPACING[2], 0)
         col.setSpacing(SPACING[1])
@@ -177,7 +163,6 @@ class Shell(QMainWindow):
         col.addWidget(self.bottom_bar)
 
         self.sidebar.setMinimumWidth(0)
-        center.setMinimumWidth(420)
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.splitter.addWidget(self.sidebar)
         self.splitter.addWidget(center)
@@ -189,22 +174,21 @@ class Shell(QMainWindow):
         self.loading = LoadingPage()
         self.no_ffmpeg = NoFfmpegPage()
         self.state_stack = QStackedWidget()
-        self.state_stack.addWidget(self.workspace)
-        self.state_stack.addWidget(self.loading)
-        self.state_stack.addWidget(self.no_ffmpeg)
+        for page in (self.workspace, self.loading, self.no_ffmpeg):
+            self.state_stack.addWidget(page)
         self.setCentralWidget(self.state_stack)
 
-        self.regions = {"sidebar": self.sidebar, "queue": self.queue_stack,
-                        "tabs": self.tabs, "preview": self.preview,
-                        "bottomBar": self.bottom_bar}
+        self.regions = {
+            "sidebar": self.sidebar, "queue": self.queue_stack,
+            "tabs": self.tabs, "preview": self.preview,
+            "bottomBar": self.bottom_bar,
+        }
 
     def _sidebar(self) -> QWidget:
         box = QFrame(objectName="sidebar")
         col = QVBoxLayout(box)
         col.setContentsMargins(*(SPACING[1],) * 4)
-        head = QLabel("Presets")
-        head.setObjectName("title")
-        col.addWidget(head)
+        col.addWidget(_lbl("Presets", obj="title"))
         self.preset_list = QListWidget()
         self.preset_list.setFrameShape(QListWidget.Shape.NoFrame)
         col.addWidget(self.preset_list, stretch=1)
@@ -256,14 +240,12 @@ class Shell(QMainWindow):
         row.setContentsMargins(*(SPACING[1],) * 4)
         row.setSpacing(SPACING[1])
         self.format = QComboBox()
-        for _target, label in FORMATS:
-            self.format.addItem(label)
-        row.addWidget(self.format)
+        self.format.addItems([label for _, label in FORMATS])
         self.export_btn = _btn("&Export script", variant="primary", icon_name="file-text")
-        row.addWidget(self.export_btn)
         self.run_btn = _btn("&Run script", icon_name="play",
                             tip="Save the script, then launch it in a new terminal window")
-        row.addWidget(self.run_btn)
+        for w in (self.format, self.export_btn, self.run_btn):
+            row.addWidget(w)
         return self.bottom_bar
 
     def set_state(self, name: str) -> None:

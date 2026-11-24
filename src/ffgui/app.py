@@ -1,5 +1,3 @@
-"""ffgui application entry: locator, capability probe, shell, controller, persistence."""
-
 from __future__ import annotations
 
 import contextlib
@@ -11,8 +9,9 @@ from PySide6.QtWidgets import QApplication, QFileDialog
 
 from fftui.ffmpeg.capability_index import CapabilityIndex
 
-from ffgui.controller import Controller, aim_ffmpeg, locate_ffmpeg
+from ffgui.controller import Controller
 from ffgui.doc import QueueDocument
+from ffgui.runtime import aim_ffmpeg, locate_ffmpeg
 from ffgui.ui.shell import Shell
 from ffgui.ui.theme import apply_theme, coerce_mode
 
@@ -37,27 +36,20 @@ def _save_state(settings: QSettings, shell: Shell) -> None:
 
 
 def _restore_state(settings: QSettings, shell: Shell) -> None:
-    """Re-apply persisted geometry/splitter/tab; corrupt values fall back."""
     if geometry := settings.value("geometry"):
         with contextlib.suppress(TypeError, ValueError):
             shell.restoreGeometry(geometry)
-    try:
-        sizes = [int(s) for s in settings.value("splitter")]
-    except (TypeError, ValueError):
-        sizes = []
-    if sizes:
-        shell.splitter.setSizes(sizes)
-    try:
+    with contextlib.suppress(TypeError, ValueError):
+        if sizes := [int(s) for s in settings.value("splitter")]:
+            shell.splitter.setSizes(sizes)
+    tab = 0
+    with contextlib.suppress(TypeError, ValueError):
         tab = int(settings.value("tab", 0))
-    except (TypeError, ValueError):
-        tab = 0
     shell.tabs.setCurrentIndex(tab)
 
 
 def _launch_probe(shell: Shell, on_done, on_failed) -> _Probe:
-    """Start the capability probe parented to the shell (a parentless QThread
-    held only by a local is GC'd mid-run → SIGABRT). Re-entrant rescans share
-    the running probe."""
+    # Parented to shell so a running QThread is not GC'd mid-run (SIGABRT).
     for child in shell.findChildren(_Probe):
         if child.isRunning():
             return child
@@ -74,15 +66,13 @@ def _boot(app: QApplication, shell: Shell, settings: QSettings, cap,
     doc = QueueDocument.load(cap)
     controller = Controller(shell, doc, cap, settings)
     shell.set_state("workspace")
-    app.aboutToQuit.connect(
-        lambda: (_save_state(settings, shell), doc.save()))
+    app.aboutToQuit.connect(lambda: (_save_state(settings, shell), doc.save()))
     for path in job_files or []:
         controller.open_job_file(path)
     return controller
 
 
-def _wire_probe(app: QApplication, shell: Shell, settings: QSettings,
-                job_files: list[str]) -> None:
+def _wire_probe(app: QApplication, shell: Shell, settings: QSettings, job_files: list[str]) -> None:
     cancelled: list[bool] = []
 
     def _probe_failed(message: str) -> None:
@@ -98,9 +88,9 @@ def _wire_probe(app: QApplication, shell: Shell, settings: QSettings,
         shell.set_state("loading")
         _launch_probe(
             shell,
-            lambda cap: None if cancelled
-            else _boot(app, shell, settings, cap, job_files),
-            lambda message: None if cancelled else _probe_failed(message))
+            lambda cap: None if cancelled else _boot(app, shell, settings, cap, job_files),
+            lambda message: None if cancelled else _probe_failed(message),
+        )
 
     def locate(path: str) -> None:
         if not path:
@@ -111,28 +101,26 @@ def _wire_probe(app: QApplication, shell: Shell, settings: QSettings,
         start_probe()
 
     def browse() -> None:
-        path, _ = QFileDialog.getOpenFileName(shell, "Locate ffmpeg", "",
-                                              "ffmpeg executable (ffmpeg.exe ffmpeg)")
+        path, _ = QFileDialog.getOpenFileName(
+            shell, "Locate ffmpeg", "", "ffmpeg executable (ffmpeg.exe ffmpeg)")
         locate(path)
 
-    def rescan() -> None:
+    def _try_locate(missing_msg: str | None = None) -> None:
         explicit, found = locate_ffmpeg(settings)
         if found:
             aim_ffmpeg(explicit)
             start_probe()
+        elif missing_msg:
+            _probe_failed(missing_msg)
         else:
-            _probe_failed("ffmpeg still not found — rescan, browse, or paste a path")
+            shell.set_state("no-ffmpeg")
 
     shell.loading.cancelled.connect(_cancel)
-    shell.no_ffmpeg.rescan.clicked.connect(rescan)
+    shell.no_ffmpeg.rescan.clicked.connect(
+        lambda: _try_locate("ffmpeg still not found — rescan, browse, or paste a path"))
     shell.no_ffmpeg.browse.clicked.connect(browse)
     shell.no_ffmpeg.accepted.connect(locate)
-    explicit, found = locate_ffmpeg(settings)
-    if found:
-        aim_ffmpeg(explicit)
-        start_probe()
-    else:
-        shell.set_state("no-ffmpeg")
+    _try_locate()
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -1,6 +1,3 @@
-"""`.sh` serialization: shlex.quote per token (never hand-rolled — 15/15 hostile
-tokens round-trip byte-exact), heredoc sidecars, `set -e`."""
-
 from __future__ import annotations
 
 import shlex
@@ -15,20 +12,19 @@ _HEREDOC = "FFGUI_EOF"
 
 
 def sh_token(token: str) -> str:
-    """One argv token POSIX-quoted. Newline/NUL tokens are unrepresentable (a
-    hostile name would splice script lines) — fail loudly."""
     reject_hostile(token)
     return shlex.quote(token)
 
 
 def _sidecar_lines(car: Sidecar) -> list[str]:
-    lines = [f"mkdir -p {sh_token(sidecar_parent(car.path))}"]
+    mkdir = f"mkdir -p {sh_token(sidecar_parent(car.path))}"
+    dest = sh_token(car.path)
     if not car.content.endswith("\n"):
-        return [*lines, f"printf %s {shlex.quote(car.content)} > {sh_token(car.path)}"]
+        return [mkdir, f"printf %s {shlex.quote(car.content)} > {dest}"]
     delim = _HEREDOC
     while delim in car.content:
         delim += "_"
-    return [*lines, f"cat > {sh_token(car.path)} <<'{delim}'", *car.content.split("\n")[:-1], delim]
+    return [mkdir, f"cat > {dest} <<'{delim}'", *car.content.split("\n")[:-1], delim]
 
 
 def sh_script(blocks: list[ExportBlock], header: ScriptHeader) -> str:

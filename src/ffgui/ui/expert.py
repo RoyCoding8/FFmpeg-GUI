@@ -1,7 +1,3 @@
-"""Expert tier: the full probed AVOption surface as a lazy, typed tree
-(kind → component → option); nodes load on expansion, the delegate maps
-Option.type to editors and gates commit through validate_option."""
-
 from __future__ import annotations
 
 import contextlib
@@ -23,16 +19,13 @@ from ffgui.store import is_truthy
 from ffgui.ui.tokens import SPACING
 
 KINDS = ("encoder", "decoder", "muxer", "demuxer", "filter", "bsf", "protocol")
-_PLURAL = {"encoder": "encoders", "decoder": "decoders", "muxer": "muxers",
-           "demuxer": "demuxers", "filter": "filters", "bsf": "bsfs",
-           "protocol": "protocols"}
+_PLURAL = {k: f"{k}s" for k in KINDS}
 _INT_SPIN = {"int", "int64", "integer", "long"}
 _FLOAT_SPIN = {"float", "double"}
 _INT_RE = re.compile(r"^-?\d+$")
 
 
 def editor_kind(opt: Option) -> str:
-    """The pure type→editor mapping the delegate implements."""
     t = (opt.type or "").strip().lower()
     if opt.choices:
         return "multicombo" if t == "flags" else "combo"
@@ -50,8 +43,7 @@ def editor_kind(opt: Option) -> str:
 class _Node:
     __slots__ = ("label", "opt", "parent", "children", "loaded", "value")
 
-    def __init__(self, label: str, parent: _Node | None = None,
-                 opt: Option | None = None):
+    def __init__(self, label: str, parent: _Node | None = None, opt: Option | None = None):
         self.label = label
         self.parent = parent
         self.opt = opt
@@ -61,8 +53,6 @@ class _Node:
 
 
 class OptionTreeModel(QAbstractItemModel):
-    """kind → component → option, with `options_for` deferred to fetchMore."""
-
     def __init__(self, cap, parent=None) -> None:
         super().__init__(parent)
         self.cap = cap
@@ -84,17 +74,17 @@ class OptionTreeModel(QAbstractItemModel):
         return [getattr(e, "name", e) for e in getattr(self.cap, _PLURAL[kind], [])]
 
     def set_target(self, kind: str, component: str) -> QModelIndex:
-        """Locate (and load) a component node, for tests and targeted expansion."""
         for k in self.root.children:
-            if k.label == kind and not k.loaded:
+            if k.label != kind:
+                continue
+            if not k.loaded:
                 k.children = [_Node(name, k) for name in self._components(kind)]
                 k.loaded = True
-            if k.label == kind:
-                for n, child in enumerate(k.children):
-                    if child.label == component:
-                        return self.createIndex(n, 0, child)
+            for n, child in enumerate(k.children):
+                if child.label == component:
+                    return self.createIndex(n, 0, child)
+            break
         return QModelIndex()
-
 
     def index(self, row: int, column: int, parent=QModelIndex()) -> QModelIndex:
         node = self._node(parent) or self.root
@@ -106,11 +96,10 @@ class OptionTreeModel(QAbstractItemModel):
         node = self._node(index)
         if node is None or node.parent is None or node.parent is self.root:
             return QModelIndex()
-        grandparent = node.parent.parent
-        if grandparent is None:
+        gp = node.parent.parent
+        if gp is None:
             return QModelIndex()
-        return self.createIndex(
-            grandparent.children.index(node.parent), 0, node.parent)
+        return self.createIndex(gp.children.index(node.parent), 0, node.parent)
 
     def rowCount(self, parent=QModelIndex()) -> int:
         return len(self._node(parent).children) if parent.isValid() else len(self.root.children)
@@ -132,9 +121,7 @@ class OptionTreeModel(QAbstractItemModel):
             return (f"{opt.type}"
                     f"{' — ' + opt.help if opt.help else ''}"
                     f"{' (default ' + opt.default + ')' if opt.default else ''}")
-        if index.column() == 0:
-            return node.label
-        return None
+        return node.label if index.column() == 0 else None
 
     def setData(self, index: QModelIndex, value, role=Qt.ItemDataRole.EditRole) -> bool:
         node = self._node(index)
@@ -174,8 +161,6 @@ class OptionTreeModel(QAbstractItemModel):
 
 
 class OptionDelegate(QStyledItemDelegate):
-    """Typed editors per Option.type; commit is gated by `validate`."""
-
     committed = Signal(str, str, object, str)
     rejected = Signal(str)
 
@@ -191,28 +176,27 @@ class OptionDelegate(QStyledItemDelegate):
             return None
         kind_ = editor_kind(node.opt)
         if kind_ == "spin":
-            editor = QSpinBox(parent)
-            editor.setRange(*self._bounds(node.opt, -2**31, 2**31 - 1))
-            return editor
+            ed = QSpinBox(parent)
+            ed.setRange(*self._bounds(node.opt, -2**31, 2**31 - 1))
+            return ed
         if kind_ == "dspin":
-            editor = QDoubleSpinBox(parent)
-            editor.setRange(*self._bounds(node.opt, -1e9, 1e9))
-            editor.setDecimals(6)
-            return editor
+            ed = QDoubleSpinBox(parent)
+            ed.setRange(*self._bounds(node.opt, -1e9, 1e9))
+            ed.setDecimals(6)
+            return ed
         if kind_ == "check":
             return QCheckBox(parent)
         if kind_ in ("combo", "pixfmt"):
-            editor = QComboBox(parent)
-            editor.addItem("")
-            editor.addItems(self.pixel_formats if kind_ == "pixfmt"
-                            else [c.name for c in node.opt.choices])
-            return editor
+            ed = QComboBox(parent)
+            ed.addItem("")
+            ed.addItems(self.pixel_formats if kind_ == "pixfmt"
+                        else [c.name for c in node.opt.choices])
+            return ed
         if kind_ == "multicombo":
-            editor = QListWidget(parent)
-            editor.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
-            for c in node.opt.choices:
-                editor.addItem(c.name)
-            return editor
+            ed = QListWidget(parent)
+            ed.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
+            ed.addItems([c.name for c in node.opt.choices])
+            return ed
         return QLineEdit(parent)
 
     @staticmethod
@@ -225,8 +209,7 @@ class OptionDelegate(QStyledItemDelegate):
         node = index.internalPointer()
         if editor is None or node is None or node.opt is None:
             return
-        current = node.value
-        kind_ = editor_kind(node.opt)
+        current, kind_ = node.value, editor_kind(node.opt)
         if kind_ == "spin" and _INT_RE.match(current or ""):
             editor.setValue(int(current))
         elif kind_ == "dspin":
@@ -263,13 +246,10 @@ class OptionDelegate(QStyledItemDelegate):
             self.rejected.emit(f"{opt.name}: {error}")
             return
         model.setData(index, value)
-        kind = node.parent.parent.label
-        self.committed.emit(kind, node.parent.label, opt, value)
+        self.committed.emit(node.parent.parent.label, node.parent.label, opt, value)
 
 
 class ExpertPanel(QWidget):
-    """Kind + component selector over the lazy tree, with the typed delegate."""
-
     optionCommitted = Signal(str, str, object, str)
     statusMessage = Signal(str)
 
@@ -290,36 +270,32 @@ class ExpertPanel(QWidget):
         row.addWidget(self.component, stretch=1)
         col.addLayout(row)
         self.tree = QTreeView()
-        self.tree.setModel(OptionTreeModel(cap))
+        self.model = OptionTreeModel(cap)
+        self.tree.setModel(self.model)
         self.delegate = OptionDelegate(self._validate, list(cap.pixel_formats), self.tree)
         self.delegate.committed.connect(self.optionCommitted)
         self.delegate.rejected.connect(self.statusMessage)
         self.tree.setItemDelegateForColumn(1, self.delegate)
         self.tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         col.addWidget(self.tree)
-        self.model = self.tree.model()
         self.kind.currentTextChanged.connect(self._fill_components)
         self.component.currentTextChanged.connect(self._expand_target)
         self._fill_components(self.kind.currentText())
 
     def _validate(self, opt: Option, value: str) -> str | None:
         error = validate_option(opt, value)
-        # validate_option promises a one-line reason, but hostile values echo
-        # back raw — keep them off the status bar/tooltip as a single line.
         return " ".join(error.replace("\0", " ").split()) if error else None
 
     def _fill_components(self, kind: str) -> None:
-        names = self.model._components(kind)
         self.component.blockSignals(True)
         self.component.clear()
-        self.component.addItems(names)
+        self.component.addItems(self.model._components(kind))
         self.component.blockSignals(False)
 
     def _expand_target(self, name: str) -> None:
         if not name:
             return
-        model = self.tree.model()
-        index = model.set_target(self.kind.currentText(), name)
+        index = self.model.set_target(self.kind.currentText(), name)
         if index.isValid():
-            self.tree.expand(model.parent(index))
+            self.tree.expand(self.model.parent(index))
             self.tree.expand(index)

@@ -1,5 +1,3 @@
-"""ffgui's per-user directories — the TUI's ``paths.py`` with ``_APP = "ffgui"``."""
-
 from __future__ import annotations
 
 import os
@@ -7,12 +5,7 @@ import platform
 from pathlib import Path
 
 _APP = "ffgui"
-_PLATFORM_ALIASES = {
-    "windows": "Windows",
-    "linux": "Linux",
-    "macos": "Darwin",
-    "darwin": "Darwin",
-}
+_PLATFORM_ALIASES = {"windows": "Windows", "linux": "Linux", "macos": "Darwin", "darwin": "Darwin"}
 _XDG = {"cache": ("XDG_CACHE_HOME", ".cache"), "config": ("XDG_CONFIG_HOME", ".config")}
 _MAC_DIRS = {"cache": "Library/Caches", "config": "Library/Application Support"}
 

@@ -1,6 +1,3 @@
-"""Design tokens: every pixel, color, and font the UI may use, as code. No widget
-may hardcode a px or hex outside this module."""
-
 from __future__ import annotations
 
 SPACING = (4, 8, 12, 16, 24, 32, 48)
@@ -9,12 +6,14 @@ RADII = {"control": 6, "card": 10, "preview": 0}
 FONT_STACK = '"Segoe UI", system-ui, sans-serif'
 MONO_STACK = '"Cascadia Mono", Consolas, "DejaVu Sans Mono", monospace'
 MONO_PT = 12
-ROW_HEIGHT = 32  # 20px 13pt line + 2x4px control padding + 2x1px border, rounded up
+ROW_HEIGHT = 34
 SIDEBAR_WIDTH = 220
 PREVIEW_MIN_HEIGHT = 120
 
-TAB_NAMES = ("Container", "Video", "Audio", "Subtitles", "Filters", "Chapters",
-             "Metadata", "Advanced")
+TAB_NAMES = (
+    "Container", "Video", "Audio", "Subtitles", "Filters", "Chapters",
+    "Metadata", "Advanced",
+)
 
 LIGHT = {
     "bg": "#F5F5F4", "surface": "#FFFFFF", "border": "#E2E2E0",

@@ -1,6 +1,3 @@
-"""One application-wide stylesheet generated from tokens.py: every value an
-``@token`` reference substituted in one pass."""
-
 from __future__ import annotations
 
 import re
@@ -20,7 +17,6 @@ UNITS = {
     "font_window": f"{TYPE['window_title']}pt", "font_secondary": f"{TYPE['secondary']}pt",
     "font_mono_size": f"{MONO_PT}pt",
     "radius_card": f"{RADII['card']}px", "radius_control": f"{RADII['control']}px",
-    # Content height: full row minus vertical control padding (s1) and 1px borders.
     "row_min": f"{ROW_HEIGHT - 2 * SPACING[0] - 2}px",
     "s1": f"{SPACING[0]}px", "s2": f"{SPACING[1]}px",
     "s3": f"{SPACING[2]}px", "s4": f"{SPACING[3]}px",
@@ -28,23 +24,17 @@ UNITS = {
 
 QSS = """
 * { outline: none; }
-QWidget {
-    background: @bg; color: @text;
-    font-family: @font; font-size: @font_body;
-}
+QWidget { background: @bg; color: @text; font-family: @font; font-size: @font_body; }
 QMainWindow, QDialog { background: @bg; }
 QLabel { background: transparent; }
 QLabel#windowTitle { font-size: @font_window; font-weight: 600; }
 QLabel#title { font-size: @font_title; font-weight: 600; }
-QLabel#secondary { font-size: @font_secondary; color: @secondary; }
-QLabel#status { font-size: @font_secondary; color: @secondary; }
+QLabel#secondary, QLabel#status { font-size: @font_secondary; color: @secondary; }
 QLabel#statusError { font-size: @font_secondary; color: @danger; }
 QLabel#statusOk { font-size: @font_secondary; color: @ok; }
 QLabel#statusWarn { font-size: @font_secondary; color: @warn; }
 
-#card, #sidebar, #bottomBar {
-    background: @surface; border: 1px solid @border; border-radius: @radius_card;
-}
+#card, #sidebar, #bottomBar { background: @surface; border: 1px solid @border; border-radius: @radius_card; }
 #preview {
     background: @preview_bg; color: @preview_fg;
     border: none; border-radius: 0px;
@@ -60,9 +50,7 @@ QPushButton {
 QPushButton:hover { border-color: @secondary; }
 QPushButton:pressed { background: @bg; }
 QPushButton:disabled { color: @secondary; background: @bg; }
-QPushButton[variant="primary"] {
-    background: @accent; color: #FFFFFF; border: 1px solid @accent; font-weight: 600;
-}
+QPushButton[variant="primary"] { background: @accent; color: #FFFFFF; border: 1px solid @accent; font-weight: 600; }
 QPushButton[variant="primary"]:hover { background: @accent_hover; border-color: @accent_hover; }
 QPushButton[variant="primary"]:disabled { background: @border; border-color: @border; color: @bg; }
 QPushButton[variant="danger"] { color: @danger; border-color: @danger; }
@@ -73,9 +61,7 @@ QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QTimeEdit, QDateEdit {
     padding: @s1 @s2; min-height: @row_min;
     selection-background-color: @accent;
 }
-QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {
-    border-color: @accent;
-}
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus { border-color: @accent; }
 QLineEdit[invalid="true"] { border-color: @danger; color: @danger; }
 QComboBox::drop-down { border: none; width: 20px; }
 QComboBox QAbstractItemView {
@@ -86,16 +72,12 @@ QComboBox QAbstractItemView {
 
 QCheckBox, QRadioButton { background: transparent; spacing: @s2; }
 QCheckBox::indicator, QRadioButton::indicator { width: 15px; height: 15px; }
-QCheckBox::indicator:unchecked { border: 1px solid @border; border-radius: 3px;
-    background: @surface; }
+QCheckBox::indicator:unchecked { border: 1px solid @border; border-radius: 3px; background: @surface; }
 QCheckBox::indicator:checked { border: 1px solid @accent; border-radius: 3px; background: @accent; }
-QRadioButton::indicator:unchecked { border: 1px solid @border; border-radius: 8px;
-    background: @surface; }
-QRadioButton::indicator:checked { border: 4px solid @accent; border-radius: 8px;
-    background: @surface; }
+QRadioButton::indicator:unchecked { border: 1px solid @border; border-radius: 8px; background: @surface; }
+QRadioButton::indicator:checked { border: 4px solid @accent; border-radius: 8px; background: @surface; }
 
-QTabWidget::pane { border: 1px solid @border; border-radius: @radius_card;
-    background: @surface; top: -1px; }
+QTabWidget::pane { border: 1px solid @border; border-radius: @radius_card; background: @surface; top: -1px; }
 QTabBar { background: transparent; }
 QTabBar::tab {
     background: transparent; color: @secondary;
@@ -133,14 +115,8 @@ QSplitter::handle:hover { background: @border; }
 QSplitter::handle:horizontal { width: @s1; }
 QSplitter::handle:vertical { height: @s1; }
 
-QToolTip {
-    background: @text; color: @bg;
-    border: none; border-radius: @radius_control; padding: @s1 @s2;
-}
-QMenu {
-    background: @surface; color: @text;
-    border: 1px solid @border; border-radius: @radius_card; padding: @s1;
-}
+QToolTip { background: @text; color: @bg; border: none; border-radius: @radius_control; padding: @s1 @s2; }
+QMenu { background: @surface; color: @text; border: 1px solid @border; border-radius: @radius_card; padding: @s1; }
 QMenu::item { padding: @s1 @s4; border-radius: @radius_control; }
 QMenu::item:selected { background: @accent; color: #FFFFFF; }
 QMenu::separator { height: 1px; background: @border; margin: @s1 @s2; }
@@ -157,7 +133,6 @@ _applied_mode = "system"
 
 
 def build_qss(pal: dict) -> str:
-    """QSS with every @token replaced in one pass (values are literal text)."""
     tokens = {**pal, **UNITS}
     names = {m.group(1) for m in re.finditer(r"@(\w+)", QSS)}
     if missing := sorted(names - set(tokens)):
@@ -170,7 +145,6 @@ def build_qss(pal: dict) -> str:
 
 
 def resolve(mode: str) -> dict:
-    """The palette for a mode ("light"|"dark"|"system"), system following Qt's hint."""
     if mode in PALETTES:
         return dict(PALETTES[mode])
     if mode != "system":
@@ -180,22 +154,18 @@ def resolve(mode: str) -> dict:
 
 
 def coerce_mode(mode) -> str:
-    """Persisted theme value sanitized: anything unknown falls back to system."""
     return mode if mode in ("light", "dark", "system") else "system"
 
 
 def applied_mode() -> str:
-    """Last mode passed to apply_theme ("system" keeps following the OS)."""
     return _applied_mode
 
 
 def active_text() -> str:
-    """Text color of the currently applied theme (what default-tint icons use)."""
     return resolve(_applied_mode)["text"]
 
 
 def apply_theme(app, mode: str = "system") -> None:
-    """Set the stylesheet for the whole application; system mode re-applies on change."""
     global _applied_mode
     stylesheet = build_qss(resolve(mode))
     _applied_mode = mode
@@ -211,5 +181,4 @@ def apply_theme(app, mode: str = "system") -> None:
 
 
 def token_refs(pal: dict) -> set:
-    """Token names the stylesheet references (@bg …), for the coverage test."""
     return {name for name in pal if re.search(rf"@{name}\b", QSS)}

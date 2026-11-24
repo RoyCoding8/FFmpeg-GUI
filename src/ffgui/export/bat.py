@@ -1,7 +1,3 @@
-"""`.bat` serialization, probed through real cmd.exe: `%` doubles, tokens wrap
-per BAT_UNSAFE, `setlocal DisableDelayedExpansion` is mandatory, sidecars embed
-as `> ( echo( … )` caret-escaped blocks, `%VAR%` tokens splice raw."""
-
 from __future__ import annotations
 
 import re
@@ -14,22 +10,18 @@ from ffgui.export.model import (
 
 BAT_UNSAFE = frozenset(' \t"\'&|<>^()!`,;=%')
 _ECHO_META = frozenset("&|<>^()")
-_ENV_REF = re.compile(r"%[A-Za-z_][A-Za-z0-9_]*%")
+_ENV_REF = re.compile(r"(%[A-Za-z_][A-Za-z0-9_]*%)")
 _TRAILING_BS = re.compile(r"\\+$")
 
 
 def _double_pct(text: str) -> str:
-    out, pos = [], 0
-    for m in _ENV_REF.finditer(text):
-        out.append(text[pos:m.start()].replace("%", "%%"))
-        out.append(m.group())
-        pos = m.end()
-    out.append(text[pos:].replace("%", "%%"))
-    return "".join(out)
+    return "".join(
+        p if i % 2 else p.replace("%", "%%")
+        for i, p in enumerate(_ENV_REF.split(text))
+    )
 
 
 def bat_token(token: str) -> str:
-    """One argv token as cmd.exe must receive it (the file's line, not its expansion)."""
     reject_hostile(token)
     if '"' in token:
         raise ValueError(f"token cannot be represented in a .bat file: {token!r}")
@@ -44,15 +36,7 @@ def bat_token(token: str) -> str:
 
 
 def _cmd_literal(line: str) -> str:
-    """Escape free text for a cmd.exe line: `%` doubles, `&|<>^()` caret-escape.
-
-    Shared by `echo(` sidecar bodies and `rem` comments — cmd parses
-    separators, redirections, and `%`-expansion before either command runs, so
-    a bare `&`, `>`, or `%0` in a comment would execute or expand."""
-    out = []
-    for ch in line.replace("%", "%%"):
-        out.append(f"^{ch}" if ch in _ECHO_META else ch)
-    return "".join(out)
+    return "".join(f"^{c}" if c in _ECHO_META else c for c in line.replace("%", "%%"))
 
 
 def _sidecar_lines(car: Sidecar) -> list[str]:
@@ -61,16 +45,17 @@ def _sidecar_lines(car: Sidecar) -> list[str]:
     if "\r" in car.content or '"' in car.content:
         raise ValueError(f"sidecar {car.path!r} cannot be represented in a .bat file")
     parent = bat_token(sidecar_parent(car.path))
-    lines = [f"if not exist {parent} mkdir {parent}", f"> {bat_token(car.path)} ("]
-    for line in car.content.split("\n")[:-1]:
-        lines.append(f" echo({_cmd_literal(line)}")
-    lines.append(")")
-    return lines
+    return [
+        f"if not exist {parent} mkdir {parent}",
+        f"> {bat_token(car.path)} (",
+        *(f" echo({_cmd_literal(line)}" for line in car.content.split("\n")[:-1]),
+        ")",
+    ]
 
 
 def bat_script(blocks: list[ExportBlock], header: ScriptHeader) -> str:
     lines = ["@echo off", "setlocal DisableDelayedExpansion",
-             *("rem " + _cmd_literal(line) for line in header_comment(header, ""))]
+             *(f"rem {_cmd_literal(line)}" for line in header_comment(header, ""))]
     for block in blocks:
         for car in block.sidecars:
             lines += _sidecar_lines(car)

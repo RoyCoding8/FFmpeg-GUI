@@ -1,6 +1,3 @@
-"""Curation overlay (assets/curation/*.yaml): friendly Expert labels/groups,
-merged additively — never removes rows."""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -21,14 +18,11 @@ def load(dir: Path | str | None = None) -> dict[str, dict]:
             continue
         for key, value in data.items():
             if isinstance(key, str) and isinstance(value, dict):
-                out[key] = {k: v for k, v in value.items()
-                            if k in ("label", "group") and isinstance(v, str)}
+                out[key] = {k: v for k, v in value.items() if k in ("label", "group") and isinstance(v, str)}
     return out
 
 
 def label_of(curations: dict[str, dict], kind: str, component: str, name: str) -> str:
     entry = curations.get(f"{kind}:{component}:{name}")
-    if not isinstance(entry, dict):
-        return name
-    label = entry.get("label", name)
+    label = entry.get("label", name) if isinstance(entry, dict) else name
     return label if isinstance(label, str) else name

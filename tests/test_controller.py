@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-from PySide6.QtCore import QEvent, QMimeData, QSettings, QThread, QUrl
+from PySide6.QtCore import QEvent, QMimeData, QSettings, Qt, QThread, QUrl
 from PySide6.QtWidgets import QCheckBox, QDialog, QFileDialog, QInputDialog
 from fftui.ffmpeg.capability_index import CapabilityIndex
 from fftui.model import Input, InputStream, Job, Output
@@ -20,8 +20,8 @@ from ffgui.controller import (
     Controller, _DropFilter, aim_ffmpeg, launch_script, locate_ffmpeg,
     terminal_argv)
 from ffgui.doc import QueueDocument, QueueItem
-from ffgui.store import UnparsedRow, delete_preset, load_presets, save_preset
-from ffgui.ui.shell import Shell
+from ffgui.store import UnparsedRow, delete_preset, fresh_meta, load_presets, save_preset
+from ffgui.ui.shell import QUEUE_COLUMNS, Shell
 
 
 @pytest.fixture()
@@ -862,3 +862,169 @@ def test_apply_flag_validates_instead_of_raw_setattr(wired):
     assert len(doc.items[0].job.inputs) == 1
     assert c._apply_flag(0, "two_pass", "True") is None
     assert doc.items[0].job.two_pass is True
+
+
+def _select_first_row(wired):
+    shell, doc, c, tmp = wired
+    c.add_paths([str(tmp / "alpha.mp4")])
+    shell.queue.selectRow(0)
+    return shell, doc, c, c.selected_rows()[0]
+
+
+def test_export_button_exports_one_script(wired, monkeypatch):
+    shell, doc, c, row = _select_first_row(wired)
+    c.add_paths([str(wired[3] / "beta.mp4")])
+    calls = {}
+    monkeypatch.setattr(
+        QFileDialog, "getSaveFileName",
+        staticmethod(lambda *a, **k: (str(wired[3] / "out.bat"), "")))
+    monkeypatch.setattr(
+        Controller, "export_to",
+        lambda self, path, target, one_file=True: calls.update(one_file=one_file))
+    shell.export_btn.click()
+    assert calls["one_file"] is True
+
+
+def test_burn_in_goes_through_subtitle_burn_in(wired):
+    shell, doc, c, row = _select_first_row(wired)
+    assert c._apply_advanced("burn", "", r"C:\subs\it's.srt", row) is None
+    out = doc.items[row].job.outputs[0]
+    assert out.subtitle_burn_in == r"C:\subs\it's.srt"
+    assert not [f for f in out.video_filters.filters if f.startswith("subtitles")]
+
+
+def test_burn_in_clears(wired):
+    shell, doc, c, row = _select_first_row(wired)
+    assert c._apply_advanced("burn", "", "subs.srt", row) is None
+    assert c._apply_advanced("burn", "", "", row) is None
+    out = doc.items[row].job.outputs[0]
+    assert out.subtitle_burn_in in ("", None)
+    assert not [f for f in out.video_filters.filters if f.startswith("subtitles")]
+
+
+def test_expert_filter_replaces_same_option(wired):
+    shell, doc, c, row = _select_first_row(wired)
+    opt = SimpleNamespace(name="width")
+    assert c._apply_expert("filter", "scale", opt, "640") is None
+    assert c._apply_expert("filter", "scale", opt, "320") is None
+    assert doc.items[row].job.video_filters.filters == ["scale=width=320"]
+
+
+def test_expert_filter_empty_value_clears_option(wired):
+    shell, doc, c, row = _select_first_row(wired)
+    opt = SimpleNamespace(name="shortest")
+    assert c._apply_expert("filter", "overlay", opt, "") is None
+    assert doc.items[row].job.video_filters.filters == []
+
+
+def test_negative_bare_volume_is_db(wired):
+    shell, doc, c, row = _select_first_row(wired)
+    assert c._apply_advanced("volume", "", "-6", row) is None
+    assert doc.items[row].job.audio_filters.filters == ["volume=-6dB"]
+
+
+def test_positive_bare_volume_stays_linear(wired):
+    shell, doc, c, row = _select_first_row(wired)
+    assert c._apply_advanced("volume", "", "0.5", row) is None
+    assert doc.items[row].job.audio_filters.filters == ["volume=0.5"]
+
+
+def test_dead_duration_column_dropped(wired):
+    shell, doc, c, tmp = wired
+    assert "Duration" not in QUEUE_COLUMNS
+    c.add_paths([str(tmp / "alpha.mp4")])
+    assert shell.queue.columnCount() == len(QUEUE_COLUMNS)
+
+
+def test_apply_preset_keeps_target_output_path(wired):
+    """The output file identifies the target row: a preset must not leak its
+    own saved output path onto the row it is applied to."""
+    shell, doc, c, tmp = wired
+    c.add_paths([str(tmp / "alpha.mp4"), str(tmp / "beta.mp4")])
+    save_preset("px", doc.items[0].job, doc.items[0].meta)
+    shell.queue.selectRow(1)
+    c.apply_preset("px")
+    delete_preset("px")
+    assert doc.items[1].job.outputs[0].path == "beta_out.mp4"
+    assert doc.items[0].job.outputs[0].path != doc.items[1].job.outputs[0].path
+
+
+def test_volume_keeps_unrelated_audio_filters(wired):
+    shell, doc, c, tmp = wired
+    c.add_paths([str(tmp / "alpha.mp4")])
+    doc.items[0].job.audio_filters.filters.append("volumedetect")
+    assert c._apply_advanced("volume", "", "-6", 0) is None
+    assert doc.items[0].job.audio_filters.filters == ["volumedetect", "volume=-6dB"]
+
+
+def test_loudnorm_keeps_unrelated_audio_filters(wired):
+    shell, doc, c, tmp = wired
+    c.add_paths([str(tmp / "alpha.mp4")])
+    doc.items[0].job.audio_filters.filters.append("volumedetect")
+    assert c._apply_advanced("loudnorm", "", "on", 0) is None
+    assert doc.items[0].job.audio_filters.filters == [
+        "volumedetect", "loudnorm=I=-16:TP=-1.5:LRA=11"]
+
+
+def test_remove_shortcut_scoped_to_queue(wired):
+    shell, doc, c, row = wired
+    action = next(a for a in shell.queue.actions() if a.text() == "Remove selected")
+    assert action.parent() is shell.queue
+    assert action.shortcutContext() == Qt.ShortcutContext.WidgetWithChildrenShortcut
+
+
+def test_streamtag_clears_language(wired):
+    shell, doc, c, tmp = wired
+    c.add_paths([str(tmp / "alpha.mp4")])
+    meta = c.tabs["Metadata"]
+    meta.stream_spec.setText("v:0")
+    meta.stream_lang.setText("eng")
+    assert c._apply_advanced("streamtag", "language", "eng", 0) is None
+    assert doc.items[0].job.outputs[0].stream_metadata == {"v:0|language": "eng"}
+    meta.stream_lang.setText("")
+    assert c._apply_advanced("streamtag", "language", "", 0) is None
+    assert doc.items[0].job.outputs[0].stream_metadata == {}
+
+
+def test_save_preset_refuses_unhealthy_row(wired, monkeypatch):
+    shell, doc, c, tmp = wired
+    c.add_paths([str(tmp / "alpha.mp4")])
+    doc.items.append(QueueItem(
+        Job(inputs=[], outputs=[]), fresh_meta("bad.mp4"), error="probe failed"))
+    shell.queue.selectRow(1)
+    monkeypatch.setattr(QInputDialog, "getText",
+                        staticmethod(lambda *a, **k: ("px", True)))
+    c.save_preset_dialog()
+    assert "px" not in load_presets()
+
+
+def test_apply_preset_drops_extra_preset_outputs(wired):
+    shell, doc, c, tmp = wired
+    c.add_paths([str(tmp / "alpha.mp4"), str(tmp / "beta.mp4")])
+    doc.items[0].job.outputs.append(Output(path="second.mp4"))
+    save_preset("px", doc.items[0].job, doc.items[0].meta)
+    shell.queue.selectRow(1)
+    c.apply_preset("px")
+    delete_preset("px")
+    assert [o.path for o in doc.items[1].job.outputs] == ["beta_out.mp4"]
+
+
+def test_selecting_error_row_clears_tabs(qapp, tmp_path, monkeypatch):
+    monkeypatch.setenv("FFGUI_CACHE_DIR", str(tmp_path / "cache"))
+
+    def probe(path):
+        if "bad" in str(path):
+            raise ValueError("probe failed")
+        return Input(path=str(path), streams=[
+            InputStream(input_index=0, spec="v:0", codec_type="video",
+                        codec_name="h264", width=64, height=48)])
+
+    settings = QSettings(str(tmp_path / "settings.ini"), QSettings.Format.IniFormat)
+    shell = Shell()
+    doc = QueueDocument(CapabilityIndex.stub(), prober=probe)
+    c = Controller(shell, doc, CapabilityIndex.stub(), settings)
+    c.add_paths([str(tmp_path / "good.mp4"), str(tmp_path / "bad.mp4")])
+    shell.queue.selectRow(0)
+    assert c.tabs["Container"].name.text() != ""
+    shell.queue.selectRow(1)
+    assert c.tabs["Container"].name.text() == ""

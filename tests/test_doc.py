@@ -1,5 +1,7 @@
 """QueueDocument tests: reorder persistence, bulk edit, validation, round-trip."""
 
+from types import SimpleNamespace
+
 import pytest
 from fftui.ffmpeg.capability_index import CapabilityIndex
 from fftui.model import InputStream, Input
@@ -657,3 +659,136 @@ def test_set_flag_toggles_and_validates(doc, tmp_path):
     assert doc.items[0].job.loglevel is None
     assert doc.set_flag(0, "two_pass", "True") is None
     assert doc.items[0].job.two_pass is True
+
+
+def test_bsf_without_spec_targets_first_video_stream(doc, tmp_path):
+    doc.add_files([str(tmp_path / "alpha.mp4")])
+    assert doc.set_bsf(0, "h264_mp4toannexb") is None
+    assert doc.items[0].job.outputs[0].bsf == {"v:0": "h264_mp4toannexb"}
+
+
+def test_bsf_spec_form_unchanged(doc, tmp_path):
+    doc.add_files([str(tmp_path / "alpha.mp4")])
+    assert doc.set_bsf(0, "a:0=aac_adtstoasc") is None
+    assert doc.items[0].job.outputs[0].bsf == {"a:0": "aac_adtstoasc"}
+
+
+def test_segment_format_follows_output_suffix(doc, tmp_path):
+    doc.add_files([str(tmp_path / "alpha.mp4")])
+    assert doc.set_output_field(0, "path", "movie.mkv") is None
+    assert doc.set_segment_enabled(0, "True") is None
+    assert doc.items[0].job.outputs[0].segment_format == "mkv"
+
+
+def test_segment_format_defaults_to_mp4_without_suffix(doc, tmp_path):
+    doc.add_files([str(tmp_path / "alpha.mp4")])
+    assert doc.set_output_field(0, "path", "movie") is None
+    assert doc.set_segment_enabled(0, "True") is None
+    assert doc.items[0].job.outputs[0].segment_format == "mp4"
+
+
+def test_faststart_merges_legacy_sibling_flags(doc, tmp_path):
+    doc.add_files([str(tmp_path / "alpha.mp4")])
+    out = doc.items[0].job.outputs[0]
+    out.video_options["movflags"] = "+faststart+nomobsync"
+    assert doc.set_faststart(0, "True") is None
+    assert out.video_options == {}
+    assert out.options["movflags"] == "+faststart+nomobsync"
+
+
+def test_faststart_off_keeps_legacy_siblings(doc, tmp_path):
+    doc.add_files([str(tmp_path / "alpha.mp4")])
+    out = doc.items[0].job.outputs[0]
+    out.video_options["movflags"] = "+faststart+nomobsync"
+    assert doc.set_faststart(0, "False") is None
+    assert out.options["movflags"] == "+nomobsync"
+    assert "movflags" not in out.video_options
+
+
+def test_probe_error_row_survives_save_load(qapp, tmp_path, probe):
+    d = QueueDocument(CapabilityIndex.stub(),
+                      prober=lambda p: (_ for _ in ()).throw(ValueError("probe failed")))
+    d.add_files([str(tmp_path / "broken.mp4")])
+    d.save(dir=tmp_path)
+    loaded = QueueDocument.load(CapabilityIndex.stub(), dir=tmp_path, prober=probe)
+    assert len(loaded.items) == 1
+    assert loaded.items[0].error
+    assert loaded.items[0].unparsed is not None
+
+
+def test_healthy_row_round_trips_as_job(qapp, tmp_path, probe):
+    d = QueueDocument(CapabilityIndex.stub(), prober=probe)
+    d.add_files([str(tmp_path / "alpha.mp4")])
+    d.save(dir=tmp_path)
+    loaded = QueueDocument.load(CapabilityIndex.stub(), dir=tmp_path, prober=probe)
+    assert loaded.items[0].error is None
+    assert loaded.items[0].unparsed is None
+    assert loaded.items[0].job.outputs[0].path == "alpha_out.mp4"
+
+
+def _muxer_cap():
+    return SimpleNamespace(
+        entry=lambda kind, name: object() if (kind, name) == ("muxer", "mp4") else None,
+        filter_kind=lambda kind: "video")
+
+
+def test_copy_codec_never_flagged_invalid(qapp, tmp_path, probe):
+    d = QueueDocument(_muxer_cap(), prober=probe)
+    d.add_files([str(tmp_path / "alpha.mp4")])
+    assert d.set_codec(0, "video", "copy") is None
+
+
+def test_unknown_codec_still_flagged(qapp, tmp_path, probe):
+    d = QueueDocument(_muxer_cap(), prober=probe)
+    d.add_files([str(tmp_path / "alpha.mp4")])
+    assert d.set_codec(0, "video", "libfoo") is not None
+
+
+def test_set_filters_becomes_effective_chain(doc, tmp_path):
+    doc.add_files([str(tmp_path / "alpha.mp4")])
+    out = doc.items[0].job.outputs[0]
+    out.video_filters.filters.append("scale=640:360")
+    assert doc.set_filters(0, "video_filters", ["unsharp"]) is None
+    assert out.video_filters.filters == []
+    assert doc.items[0].job.video_filters.filters == ["unsharp"]
+
+
+def test_set_filters_clears_stale_output_audio_chain(doc, tmp_path):
+    doc.add_files([str(tmp_path / "alpha.mp4")])
+    out = doc.items[0].job.outputs[0]
+    out.audio_filters.filters.append("loudnorm=I=-16")
+    assert doc.set_filters(0, "audio_filters", ["volume=-6dB"]) is None
+    assert out.audio_filters.filters == []
+    assert doc.items[0].job.audio_filters.filters == ["volume=-6dB"]
+
+
+def test_cleared_subtitle_burn_in_survives_save_load(doc, tmp_path):
+    doc.add_files([str(tmp_path / "alpha.mp4")])
+    assert doc.set_output_field(0, "subtitle_burn_in", "captions.srt") is None
+    assert doc.set_output_field(0, "subtitle_burn_in", "") is None
+    store = tmp_path / "store"
+    doc.save(store)
+
+    loaded = QueueDocument.load(CapabilityIndex.stub(), store)
+
+    assert loaded.item(0).error is None
+    assert loaded.item(0).job.outputs[0].subtitle_burn_in == ""
+    assert loaded.item(0).job.outputs[0].path == "alpha_out.mp4"
+    assert "-vf" not in loaded.argv(0)
+
+
+@pytest.mark.parametrize(("text", "spec", "expression"), [
+    ("h264_metadata=aud=insert", "v:0", "h264_metadata=aud=insert"),
+    ("v:0=h264_metadata=aud=insert", "v:0", "h264_metadata=aud=insert"),
+    ("a:0=aac_adtstoasc", "a:0", "aac_adtstoasc"),
+    ("=h264_mp4toannexb", "v:0", "h264_mp4toannexb"),
+])
+def test_bsf_preserves_filter_options(doc, tmp_path, text, spec, expression):
+    doc.add_files([str(tmp_path / "alpha.mp4")])
+    assert doc.set_bsf(0, text) is None
+
+    argv = doc.argv(0)
+
+    assert doc.item(0).job.outputs[0].bsf == {spec: expression}
+    index = argv.index(f"-bsf:{spec}")
+    assert argv[index + 1] == expression

@@ -1,4 +1,4 @@
-"""Second-wave hostile inputs: type confusion at every public seam.
+"""Hostile inputs: type confusion at every public seam.
 
 Contract: a mistyped argument is refused loudly (error string, ValueError,
 or IndexError) and never leaks TypeError/AttributeError, stores a mistyped

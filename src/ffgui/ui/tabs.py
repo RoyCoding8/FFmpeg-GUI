@@ -1,14 +1,10 @@
-"""The eight tab pages: widgets load from a QueueItem and emit typed edits into
-QueueDocument. Every capability combo populates from the probed CapabilityIndex
-and DISABLES with a tooltip when absent."""
-
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QFormLayout, QGroupBox,
-    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-    QPushButton, QScrollArea, QTableWidget, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QHeaderView,
+    QLabel, QLineEdit, QListWidget, QListWidgetItem, QPushButton, QScrollArea,
+    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from fftui.ffmpeg.capability_index import CapabilityIndex
@@ -28,11 +24,12 @@ X264_TUNES = ("film", "animation", "grain", "stillimage", "psnr", "ssim",
 H264_PROFILES = ("baseline", "main", "high", "high10", "high422", "high444")
 AUDIO_CHANNELS = ("1", "2", "6")
 SAMPLE_RATES = ("44100", "48000", "96000", "192000")
+_HW_SUFFIXES = ("cuvid", "qsv", "vaapi", "dxva2", "d3d11va", "vulkan", "mmal")
 
 
 def _page_col(page: QWidget) -> QVBoxLayout:
     col = QVBoxLayout(page)
-    col.setContentsMargins(SPACING[2], SPACING[2], SPACING[2], SPACING[2])
+    col.setContentsMargins(*(SPACING[2],) * 4)
     col.setSpacing(SPACING[1])
     return col
 
@@ -58,15 +55,7 @@ def _combo(*items: str) -> QComboBox:
     return box
 
 
-def _text(form: QFormLayout, label: str, placeholder: str = "") -> QLineEdit:
-    edit = QLineEdit()
-    edit.setPlaceholderText(placeholder)
-    form.addRow(label, edit)
-    return edit
-
-
 def _gated(combo: QComboBox, names, tip: str, extra: tuple[str, ...] = ()) -> None:
-    """Populate from the probed build, or disable visibly when absent."""
     if not names:
         combo.setEnabled(False)
         combo.setToolTip(f"not present in this ffmpeg build — {tip}")
@@ -77,9 +66,18 @@ def _gated(combo: QComboBox, names, tip: str, extra: tuple[str, ...] = ()) -> No
     combo.addItems(names)
 
 
-class TabPage(QWidget):
-    """Base: populate() fills widgets with signals blocked; user edits emit edit()."""
+def _secondary_label(text: str) -> QLabel:
+    label = QLabel(text)
+    label.setObjectName("secondary")
+    label.setWordWrap(True)
+    return label
 
+
+def _clean(text: str) -> str:
+    return text.replace("\x1f", " ").replace("\n", " ").replace("\r", " ")
+
+
+class TabPage(QWidget):
     edit = Signal(str, str, str)
 
     def __init__(self) -> None:
@@ -106,35 +104,65 @@ class TabPage(QWidget):
     def _watch(self, signal, kind: str, key: str, to_text=str) -> None:
         signal.connect(lambda *a: self.edit.emit(kind, key, to_text(a[0] if a else None)))
 
+    def _group(self, col: QVBoxLayout, title: str, *, stretch: int = 0) -> QFormLayout:
+        box, form = _form(title)
+        col.addWidget(box, stretch=stretch)
+        return form
+
+    def _field(self, form: QFormLayout | None, name: str, label: str,
+               kind: str, key: str = "", placeholder: str = "") -> QLineEdit:
+        w = QLineEdit()
+        w.setPlaceholderText(placeholder)
+        if form is not None:
+            form.addRow(label, w)
+        self.widgets[name] = w
+        self._watch(w.textEdited, kind, key)
+        return w
+
+    def _combo(self, form: QFormLayout, name: str, label: str,
+               kind: str, key: str = "", *, items: tuple[str, ...] = (),
+               gated: tuple | None = None, tip: str = "") -> QComboBox:
+        w = _combo(*items)
+        if gated is not None:
+            _gated(w, *gated)
+        elif tip:
+            w.setToolTip(tip)
+        form.addRow(label, w)
+        self.widgets[name] = w
+        self._watch(w.currentTextChanged, kind, key)
+        return w
+
+    def _check(self, target: QFormLayout | QVBoxLayout | QHBoxLayout, name: str,
+               text: str, kind: str, key: str = "", *, tip: str = "",
+               to_text=str) -> QCheckBox:
+        w = QCheckBox(text)
+        if tip:
+            w.setToolTip(tip)
+        target.addRow(w) if isinstance(target, QFormLayout) else target.addWidget(w)
+        self.widgets[name] = w
+        self._watch(w.toggled, kind, key, to_text)
+        return w
+
 
 class ContainerTab(TabPage):
     def __init__(self) -> None:
         super().__init__()
         col = _page_col(self)
-        file_box, file_form = _form("Output file")
-        self.name = _text(file_form, "File name", "output file name for this row")
-        self.container = _combo(*VIDEO_CONTAINERS, *AUDIO_CONTAINERS)
-        file_form.addRow("Container", self.container)
-        self.muxer = _combo(*FORCE_MUXERS)
-        self.muxer.setToolTip("Force the muxer when several match (dst-muxer-choice)")
-        file_form.addRow("Muxer", self.muxer)
-        col.addWidget(file_box)
-        range_box, range_form = _form("Range (trim)")
-        self.start = _text(range_form, "Start", "e.g. 00:00:05 or 5.5")
-        self.duration = _text(range_form, "Duration", "length, e.g. 90 or 00:01:30")
-        col.addWidget(range_box)
-        self.overwrite = QCheckBox("Overwrite outputs without asking (-y)")
-        col.addWidget(self.overwrite)
+        f = self._group(col, "Output file")
+        self.name = self._field(f, "path", "File name", "field", "path",
+                                "output file name for this row")
+        self.container = self._combo(f, "container", "Container", "field", "container",
+                                     items=(*VIDEO_CONTAINERS, *AUDIO_CONTAINERS))
+        self.muxer = self._combo(f, "muxer", "Muxer", "option", "mux:f", items=FORCE_MUXERS,
+                                 tip="Force the muxer when several match (dst-muxer-choice)")
+        r = self._group(col, "Range (trim)")
+        self.start = self._field(r, "start", "Start", "field", "start",
+                                 "e.g. 00:00:05 or 5.5")
+        self.duration = self._field(r, "duration", "Duration", "field", "duration",
+                                    "length, e.g. 90 or 00:01:30")
+        self.overwrite = self._check(col, "overwrite", "Overwrite outputs without asking (-y)",
+                                     "flag", "noconfirm", to_text=lambda on: str(not on))
         col.addStretch(1)
-        self.widgets = {"path": self.name, "container": self.container,
-                        "muxer": self.muxer, "start": self.start,
-                        "duration": self.duration, "overwrite": self.overwrite}
-        self._watch(self.name.textEdited, "field", "path")
-        self._watch(self.container.currentTextChanged, "field", "container")
-        self._watch(self.muxer.currentTextChanged, "option", "mux:f")
-        self._watch(self.start.textEdited, "field", "start")
-        self._watch(self.duration.textEdited, "field", "duration")
-        self._watch(self.overwrite.toggled, "flag", "noconfirm", lambda on: str(not on))
 
     def load(self, out: Output, job: Job) -> None:
         self._set_text(self.name, out.path)
@@ -149,49 +177,30 @@ class VideoTab(TabPage):
     def __init__(self, cap: CapabilityIndex) -> None:
         super().__init__()
         col = _page_col(self)
-        codec_box, codec_form = _form("Video codec")
-        self.codec = _combo()
-        _gated(self.codec, cap.video_encoders(),
-               "encoder list from your ffmpeg build", extra=("copy",))
-        codec_form.addRow("Codec", self.codec)
-        col.addWidget(codec_box)
-
-        opt_box, opt_form = _form("Rate control and tuning")
-        self.crf = _text(opt_form, "CRF / CQ", "quality (e.g. 23) — or set bitrate below")
-        self.bitrate = _text(opt_form, "Bitrate", "e.g. 1500k")
-        self.maxrate = _text(opt_form, "Max rate", "ceiling, e.g. 2M")
-        self.preset = _combo(*X264_PRESETS)
-        opt_form.addRow("Preset", self.preset)
-        self.tune = _combo(*X264_TUNES)
-        opt_form.addRow("Tune", self.tune)
-        self.profile = _combo(*H264_PROFILES)
-        opt_form.addRow("Profile", self.profile)
-        self.pixfmt = _combo()
-        _gated(self.pixfmt, cap.pixel_formats, "pixel formats from your build")
-        opt_form.addRow("Pixel format", self.pixfmt)
-        self.gop = _text(opt_form, "GOP", "keyframe interval, e.g. 250")
-        self.threads = _text(opt_form, "Threads", "0 = auto")
-        col.addWidget(opt_box)
-
-        misc_box, misc_form = _form("Compatibility")
-        self.faststart = QCheckBox("Web fast start (movflags +faststart)")
-        misc_form.addRow(self.faststart)
-        col.addWidget(misc_box)
+        f = self._group(col, "Video codec")
+        self.codec = self._combo(f, "codec", "Codec", "codec", "video",
+                                 gated=(cap.video_encoders(),
+                                        "encoder list from your ffmpeg build", ("copy",)))
+        f = self._group(col, "Rate control and tuning")
+        self.crf = self._field(f, "crf", "CRF / CQ", "option", "video:crf",
+                               "quality (e.g. 23) — or set bitrate below")
+        self.bitrate = self._field(f, "bitrate", "Bitrate", "option", "video:b:v", "e.g. 1500k")
+        self.maxrate = self._field(f, "maxrate", "Max rate", "option", "video:maxrate",
+                                   "ceiling, e.g. 2M")
+        self.preset = self._combo(f, "preset", "Preset", "option", "video:preset",
+                                  items=X264_PRESETS)
+        self.tune = self._combo(f, "tune", "Tune", "option", "video:tune", items=X264_TUNES)
+        self.profile = self._combo(f, "profile", "Profile", "option", "video:profile:v",
+                                   items=H264_PROFILES)
+        self.pixfmt = self._combo(f, "pixfmt", "Pixel format", "option", "video:pix_fmt",
+                                  gated=(cap.pixel_formats, "pixel formats from your build"))
+        self.gop = self._field(f, "gop", "GOP", "option", "video:g",
+                               "keyframe interval, e.g. 250")
+        self.threads = self._field(f, "threads", "Threads", "option", "video:threads", "0 = auto")
+        f = self._group(col, "Compatibility")
+        self.faststart = self._check(f, "faststart", "Web fast start (movflags +faststart)",
+                                     "faststart")
         col.addStretch(1)
-        self.widgets = {"codec": self.codec, "crf": self.crf, "bitrate": self.bitrate,
-                        "maxrate": self.maxrate, "preset": self.preset,
-                        "tune": self.tune, "profile": self.profile,
-                        "pixfmt": self.pixfmt, "gop": self.gop,
-                        "threads": self.threads, "faststart": self.faststart}
-        self._watch(self.codec.currentTextChanged, "codec", "video")
-        for key, widget in (("crf", self.crf), ("b:v", self.bitrate),
-                            ("maxrate", self.maxrate), ("g", self.gop),
-                            ("threads", self.threads)):
-            self._watch(widget.textEdited, "option", f"video:{key}")
-        for key, widget in (("preset", self.preset), ("tune", self.tune),
-                            ("profile:v", self.profile), ("pix_fmt", self.pixfmt)):
-            self._watch(widget.currentTextChanged, "option", f"video:{key}")
-        self._watch(self.faststart.toggled, "faststart", "")
 
     def load(self, out: Output, job: Job) -> None:
         v = out.video_options
@@ -212,35 +221,22 @@ class AudioTab(TabPage):
     def __init__(self, cap: CapabilityIndex) -> None:
         super().__init__()
         col = _page_col(self)
-        codec_box, codec_form = _form("Audio codec")
-        self.codec = _combo()
-        _gated(self.codec, cap.audio_encoders(),
-               "encoder list from your ffmpeg build", extra=("copy",))
-        codec_form.addRow("Codec", self.codec)
-        col.addWidget(codec_box)
-        opt_box, opt_form = _form("Audio options")
-        self.bitrate = _text(opt_form, "Bitrate", "e.g. 192k")
-        self.channels = _combo(*AUDIO_CHANNELS)
-        opt_form.addRow("Channels", self.channels)
-        self.samplerate = _combo(*SAMPLE_RATES)
-        opt_form.addRow("Sample rate", self.samplerate)
-        col.addWidget(opt_box)
-        fx_box, fx_form = _form("Processing")
-        self.volume = _text(fx_form, "Volume", "dB (e.g. -6) or linear (e.g. 0.5)")
-        self.loudnorm = QCheckBox("Loudness normalize (EBU R128)")
-        self.loudnorm.setToolTip("Applies the EBU R128 loudnorm filter")
-        fx_form.addRow(self.loudnorm)
-        col.addWidget(fx_box)
+        f = self._group(col, "Audio codec")
+        self.codec = self._combo(f, "codec", "Codec", "codec", "audio",
+                                 gated=(cap.audio_encoders(),
+                                        "encoder list from your ffmpeg build", ("copy",)))
+        f = self._group(col, "Audio options")
+        self.bitrate = self._field(f, "bitrate", "Bitrate", "option", "audio:b:a", "e.g. 192k")
+        self.channels = self._combo(f, "channels", "Channels", "option", "audio:ac",
+                                    items=AUDIO_CHANNELS)
+        self.samplerate = self._combo(f, "samplerate", "Sample rate", "option", "audio:ar",
+                                      items=SAMPLE_RATES)
+        f = self._group(col, "Processing")
+        self.volume = self._field(f, "volume", "Volume", "volume",
+                                  placeholder="dB (e.g. -6) or linear (e.g. 0.5)")
+        self.loudnorm = self._check(f, "loudnorm", "Loudness normalize (EBU R128)", "loudnorm",
+                                    tip="Applies the EBU R128 loudnorm filter")
         col.addStretch(1)
-        self.widgets = {"codec": self.codec, "bitrate": self.bitrate,
-                        "channels": self.channels, "samplerate": self.samplerate,
-                        "volume": self.volume, "loudnorm": self.loudnorm}
-        self._watch(self.codec.currentTextChanged, "codec", "audio")
-        self._watch(self.bitrate.textEdited, "option", "audio:b:a")
-        self._watch(self.channels.currentTextChanged, "option", "audio:ac")
-        self._watch(self.samplerate.currentTextChanged, "option", "audio:ar")
-        self._watch(self.volume.textEdited, "volume", "")
-        self._watch(self.loudnorm.toggled, "loudnorm", "")
 
     def load(self, out: Output, job: Job) -> None:
         a = out.audio_options
@@ -263,21 +259,14 @@ class SubtitlesTab(TabPage):
     def __init__(self, cap: CapabilityIndex) -> None:
         super().__init__()
         col = _page_col(self)
-        box, form = _form("Subtitle tracks")
-        self.codec = _combo(*SUBTITLE_CODECS)
-        form.addRow("Codec", self.codec)
-        self.drop = QCheckBox("Drop subtitle streams (-sn)")
-        form.addRow(self.drop)
-        col.addWidget(box)
-        burn_box, burn_form = _form("Burn in")
-        self.burn = _text(burn_form, "File", "subtitle file to render into the pixels")
-        col.addWidget(burn_box)
+        f = self._group(col, "Subtitle tracks")
+        self.codec = self._combo(f, "codec", "Codec", "codec", "subtitle", items=SUBTITLE_CODECS)
+        self.drop = self._check(f, "drop", "Drop subtitle streams (-sn)", "codec", "subtitle",
+                                to_text=lambda on: "none" if on else "")
+        f = self._group(col, "Burn in")
+        self.burn = self._field(f, "burn", "File", "burn",
+                                placeholder="subtitle file to render into the pixels")
         col.addStretch(1)
-        self.widgets = {"codec": self.codec, "drop": self.drop, "burn": self.burn}
-        self._watch(self.codec.currentTextChanged, "codec", "subtitle")
-        self.drop.toggled.connect(
-            lambda on: self.edit.emit("codec", "subtitle", "none" if on else ""))
-        self._watch(self.burn.textEdited, "burn", "")
 
     def load(self, out: Output, job: Job) -> None:
         self.codec.setCurrentText(out.subtitle_codec or "")
@@ -289,17 +278,16 @@ class SubtitlesTab(TabPage):
 
 
 class FiltersTab(TabPage):
-    """Filter chain editor: -vf/-af chains with capability-gated filter names."""
-
     def __init__(self, cap: CapabilityIndex) -> None:
         super().__init__()
         col = _page_col(self)
         self.lists: dict[str, QListWidget] = {}
-        col.addWidget(QLabel_("Chain entries run left to right; add from your "
-                              "build's filters, edit inline, remove with the button."))
+        col.addWidget(_secondary_label(
+            "Chain entries run left to right; add from your build's filters, "
+            "edit inline, remove with the button."))
         for stream, label in (("video_filters", "Video filters (-vf)"),
                               ("audio_filters", "Audio filters (-af)")):
-            box, form = _form(label)
+            form = self._group(col, label)
             listing = QListWidget()
             listing.setFrameShape(QListWidget.Shape.NoFrame)
             listing.setMinimumHeight(72)
@@ -311,25 +299,23 @@ class FiltersTab(TabPage):
             _gated(combo, names, f"filters from your build ({stream})")
             params = QLineEdit()
             params.setPlaceholderText("params, e.g. 640:360")
-            add = QPushButton("Add")
-            remove = QPushButton("Remove")
+            add, remove = QPushButton("Add"), QPushButton("Remove")
             row.addWidget(combo, stretch=2)
             row.addWidget(params, stretch=3)
             row.addWidget(add)
             row.addWidget(remove)
             form.addRow(row)
-            col.addWidget(box)
             self.lists[stream] = listing
             add.clicked.connect(lambda _, s=stream, c=combo, p=params:
                                 self._add(s, c.currentText(), p.text()))
             remove.clicked.connect(
-                lambda _, s=stream, l=listing: self._remove(s, l.currentRow()))
+                lambda _, s=stream, lst=listing: self._remove(s, lst.currentRow()))
             listing.itemChanged.connect(
-                lambda _, s=stream, l=listing: self._emit_chain(s, l))
+                lambda _, s=stream, lst=listing: self._emit_chain(s, lst))
         col.addStretch(1)
         self.widgets = dict(self.lists)
 
-    def _add(self, stream, name, params):
+    def _add(self, stream: str, name: str, params: str) -> None:
         if not name:
             return
         item = QListWidgetItem(f"{name}={params}" if params else name)
@@ -337,16 +323,13 @@ class FiltersTab(TabPage):
         self.lists[stream].addItem(item)
         self._emit_chain(stream, self.lists[stream])
 
-    def _remove(self, stream, row):
+    def _remove(self, stream: str, row: int) -> None:
         if row >= 0:
             self.lists[stream].takeItem(row)
             self._emit_chain(stream, self.lists[stream])
 
-    def _emit_chain(self, stream, listing):
-        def clean(item):
-            return (item.text().replace("\x1f", " ").replace("\n", " ")
-                    .replace("\r", " "))
-        chain = [clean(listing.item(i)) for i in range(listing.count())]
+    def _emit_chain(self, stream: str, listing: QListWidget) -> None:
+        chain = [_clean(listing.item(i).text()) for i in range(listing.count())]
         self.edit.emit("filters", stream, "\n".join(chain))
 
     def load(self, out: Output, job: Job) -> None:
@@ -360,18 +343,11 @@ class FiltersTab(TabPage):
             listing.blockSignals(False)
 
 
-def QLabel_(text: str):
-    label = QLabel(text)
-    label.setObjectName("secondary")
-    label.setWordWrap(True)
-    return label
-
-
 class ChaptersTab(TabPage):
     def __init__(self, cap: CapabilityIndex) -> None:
         super().__init__()
         col = _page_col(self)
-        col.addWidget(QLabel_("Chapter marks export as an ffmetadata sidecar."))
+        col.addWidget(_secondary_label("Chapter marks export as an ffmetadata sidecar."))
         self.table = QTableWidget(0, 3)
         self.table.setHorizontalHeaderLabels(("Start", "Title", "Language"))
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
@@ -380,8 +356,7 @@ class ChaptersTab(TabPage):
         self.table.itemChanged.connect(lambda _: self._emit())
         col.addWidget(self.table)
         row = _row()
-        add = QPushButton("Add chapter")
-        remove = QPushButton("Remove selected")
+        add, remove = QPushButton("Add chapter"), QPushButton("Remove selected")
         row.addWidget(add)
         row.addWidget(remove)
         col.addLayout(row)
@@ -390,22 +365,21 @@ class ChaptersTab(TabPage):
         remove.clicked.connect(self._remove_row)
         self.widgets = {"table": self.table}
 
-    def _remove_row(self):
+    def _remove_row(self) -> None:
         row = self.table.currentRow()
         if row >= 0:
             self.table.removeRow(row)
             self._emit()
 
-    def _emit(self):
-        def clean(cell):
-            text = cell.text() if cell is not None else ""
-            return text.replace("\x1f", " ").replace("\n", " ").replace("\r", " ")
-        rows = ["\x1f".join(clean(self.table.item(r, c)) for c in range(3))
-                for r in range(self.table.rowCount())]
+    def _emit(self) -> None:
+        rows = [
+            "\x1f".join(_clean(c.text() if c is not None else "")
+                        for c in (self.table.item(r, i) for i in range(3)))
+            for r in range(self.table.rowCount())
+        ]
         self.edit.emit("chapters", "", "\n".join(rows))
 
     def load(self, out: Output, job: Job) -> None:
-        from PySide6.QtWidgets import QTableWidgetItem
         self.table.blockSignals(True)
         self.table.setRowCount(0)
         for ch in out.chapters:
@@ -419,27 +393,19 @@ class ChaptersTab(TabPage):
 class MetadataTab(TabPage):
     def __init__(self) -> None:
         super().__init__()
-        box, form = _form("Tags")
-        self.title = _text(form, "Title")
-        self.comment = _text(form, "Comment")
-        cover_box, cover_form = _form("Cover art")
-        self.cover = _text(cover_form, "Image", "image file to attach as cover")
-        streams_box, streams_form = _form("Per-stream tags")
-        self.stream_spec = _text(streams_form, "Stream", "stream spec, e.g. v:0")
-        self.stream_lang = _text(streams_form, "Language tag", "language, e.g. eng")
-        self.widgets = {"title": self.title, "comment": self.comment,
-                        "cover": self.cover, "stream_spec": self.stream_spec,
-                        "stream_lang": self.stream_lang}
-        outer = _page_col(self)
-        outer.addWidget(box)
-        outer.addWidget(cover_box)
-        outer.addWidget(streams_box)
-        outer.addStretch(1)
-        self._watch(self.title.textEdited, "field", "title")
-        self._watch(self.comment.textEdited, "field", "comment")
-        self._watch(self.cover.textEdited, "field", "cover_art")
-        self._watch(self.stream_lang.textEdited, "streamtag", "language")
-        self._watch(self.stream_spec.textEdited, "streamtag", "spec")
+        col = _page_col(self)
+        f = self._group(col, "Tags")
+        self.title = self._field(f, "title", "Title", "field", "title")
+        self.comment = self._field(f, "comment", "Comment", "field", "comment")
+        f = self._group(col, "Cover art")
+        self.cover = self._field(f, "cover", "Image", "field", "cover_art",
+                                 "image file to attach as cover")
+        f = self._group(col, "Per-stream tags")
+        self.stream_spec = self._field(f, "stream_spec", "Stream", "streamtag", "spec",
+                                       "stream spec, e.g. v:0")
+        self.stream_lang = self._field(f, "stream_lang", "Language tag", "streamtag", "language",
+                                       "language, e.g. eng")
+        col.addStretch(1)
 
     def load(self, out: Output, job: Job) -> None:
         self._set_text(self.title, out.metadata.get("title", ""))
@@ -451,54 +417,34 @@ class AdvancedTab(TabPage):
     def __init__(self, cap: CapabilityIndex) -> None:
         super().__init__()
         col = _page_col(self)
-        perf_box, perf_form = _form("Performance")
-        self.hwdecode = _combo()
-        hw_decoders = [d.name for d in cap.decoders
-                       if d.name.endswith(("cuvid", "qsv", "vaapi", "dxva2",
-                                           "d3d11va", "vulkan", "mmal"))]
-        _gated(self.hwdecode, hw_decoders, "hardware decoders from your build")
-        perf_form.addRow("HW decode (decoder)", self.hwdecode)
-        self.hwdevice = _text(perf_form, "HW device", "-filter_hw_device name, e.g. gpu0")
-        col.addWidget(perf_box)
-
-        out_box, out_form = _form("Output modes")
-        self.twopass = QCheckBox("Two-pass encode")
-        self.twopass.setToolTip("Runs the encode twice, error-checked between passes")
-        out_form.addRow(self.twopass)
+        f = self._group(col, "Performance")
+        hw_decoders = [d.name for d in cap.decoders if d.name.endswith(_HW_SUFFIXES)]
+        self.hwdecode = self._combo(f, "hwdecode", "HW decode (decoder)", "hwdecode",
+                                    gated=(hw_decoders, "hardware decoders from your build"))
+        self.hwdevice = self._field(f, "hwdevice", "HW device", "hwdevice",
+                                    placeholder="-filter_hw_device name, e.g. gpu0")
+        f = self._group(col, "Output modes")
+        self.twopass = self._check(f, "twopass", "Two-pass encode", "flag", "two_pass",
+                                   tip="Runs the encode twice, error-checked between passes")
         seg_row = _row()
-        self.segment = QCheckBox("Segment")
-        self.segment_time = QLineEdit()
-        self.segment_time.setPlaceholderText("seconds per part, e.g. 600")
-        seg_row.addWidget(self.segment)
+        self.segment = self._check(seg_row, "segment", "Segment", "segment")
+        self.segment_time = self._field(None, "segment_time", "", "segment_time",
+                                        placeholder="seconds per part, e.g. 600")
         seg_row.addWidget(self.segment_time, stretch=1)
-        out_form.addRow(seg_row)
-        self.bsf = _text(out_form, "Bitstream filter",
-                         "stream=filter, e.g. v:0=h264_mp4toannexb")
-        self.tee = _text(out_form, "Tee outputs", "[f=mp4]a.mp4|[f=webm]b.webm")
-        col.addWidget(out_box)
-
-        in_box, in_form = _form("Input options")
-        self.seek = _text(in_form, "Seek to", "fast input seek (-ss before -i), e.g. 10")
-        self.loop = _text(in_form, "Loop", "-loop count (stills/short inputs)")
-        col.addWidget(in_box)
-        expert_box, _ = _form("Expert — every AVOption in your build")
+        f.addRow(seg_row)
+        self.bsf = self._field(f, "bsf", "Bitstream filter", "bsf",
+                               placeholder="stream=filter, e.g. v:0=h264_mp4toannexb")
+        self.tee = self._field(f, "tee", "Tee outputs", "tee",
+                               placeholder="[f=mp4]a.mp4|[f=webm]b.webm")
+        f = self._group(col, "Input options")
+        self.seek = self._field(f, "seek", "Seek to", "input", "-ss",
+                                "fast input seek (-ss before -i), e.g. 10")
+        self.loop = self._field(f, "loop", "Loop", "input", "-loop",
+                                "-loop count (stills/short inputs)")
+        f = self._group(col, "Expert — every AVOption in your build", stretch=1)
         self.expert = ExpertPanel(cap)
         self.expert.setMinimumHeight(220)
-        expert_box.layout().addRow(self.expert)
-        col.addWidget(expert_box, stretch=1)
-        self.widgets = {"hwdecode": self.hwdecode, "hwdevice": self.hwdevice,
-                        "twopass": self.twopass, "segment": self.segment,
-                        "segment_time": self.segment_time, "bsf": self.bsf,
-                        "tee": self.tee, "seek": self.seek, "loop": self.loop}
-        self._watch(self.hwdecode.currentTextChanged, "hwdecode", "")
-        self._watch(self.hwdevice.textEdited, "hwdevice", "")
-        self._watch(self.twopass.toggled, "flag", "two_pass")
-        self._watch(self.segment.toggled, "segment", "")
-        self._watch(self.segment_time.textEdited, "segment_time", "")
-        self._watch(self.bsf.textEdited, "bsf", "")
-        self._watch(self.tee.textEdited, "tee", "")
-        self._watch(self.seek.textEdited, "input", "-ss")
-        self._watch(self.loop.textEdited, "input", "-loop")
+        f.addRow(self.expert)
 
     def load(self, out: Output, job: Job) -> None:
         self._set_text(self.hwdevice, job.filter_hw_device or "")

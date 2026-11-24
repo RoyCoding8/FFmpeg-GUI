@@ -11,3 +11,5 @@ build/nuitka-build/
 .claude.worktrees/
 queue.json
 queue.json.lock
+
+.worktrees/
