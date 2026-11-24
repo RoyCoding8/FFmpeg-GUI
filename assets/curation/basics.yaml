@@ -1,10 +1,135 @@
 # Friendly labels for high-traffic Expert options (overlay only — never removes rows).
+
+# H.264 (x264)
 "encoder:libx264:crf":
   label: Quality (CRF)
   group: Rate control
 "encoder:libx264:preset":
   label: Speed preset
   group: Rate control
+"encoder:libx264:tune":
+  label: Content tuning
+  group: Rate control
+"encoder:libx264:profile":
+  label: Compatibility profile
+  group: Compatibility
+"encoder:libx264:level":
+  label: Decoder level
+  group: Compatibility
+"encoder:libx264:x264-params":
+  label: Custom x264 parameters
+  group: Advanced
+
+# H.265 / HEVC (x265)
+"encoder:libx265:crf":
+  label: Quality (CRF)
+  group: Rate control
+"encoder:libx265:preset":
+  label: Encoding speed
+  group: Rate control
+"encoder:libx265:tune":
+  label: Content tuning
+  group: Rate control
+"encoder:libx265:profile":
+  label: Compatibility profile
+  group: Compatibility
+"encoder:libx265:x265-params":
+  label: Custom x265 parameters
+  group: Advanced
+
+# AV1 (SVT-AV1)
+"encoder:libsvtav1:crf":
+  label: Quality (CRF)
+  group: Rate control
+"encoder:libsvtav1:preset":
+  label: Encoding speed (0-13)
+  group: Rate control
+"encoder:libsvtav1:svtav1-params":
+  label: Custom SVT-AV1 parameters
+  group: Advanced
+
+# NVIDIA NVENC H.264
+"encoder:h264_nvenc:cq":
+  label: Target quality (CQ)
+  group: Rate control
+"encoder:h264_nvenc:preset":
+  label: GPU speed preset
+  group: Rate control
+"encoder:h264_nvenc:rc":
+  label: Rate control mode
+  group: Rate control
+"encoder:h264_nvenc:profile":
+  label: Compatibility profile
+  group: Compatibility
+"encoder:h264_nvenc:spatial-aq":
+  label: Spatial adaptive quality
+  group: Quality
+
+# NVIDIA NVENC HEVC
+"encoder:hevc_nvenc:cq":
+  label: Target quality (CQ)
+  group: Rate control
+"encoder:hevc_nvenc:preset":
+  label: GPU speed preset
+  group: Rate control
+"encoder:hevc_nvenc:rc":
+  label: Rate control mode
+  group: Rate control
+"encoder:hevc_nvenc:profile":
+  label: Compatibility profile
+  group: Compatibility
+"encoder:hevc_nvenc:tier":
+  label: Bitrate tier
+  group: Compatibility
+
+# AAC audio
+"encoder:aac:aac_coder":
+  label: Psychoacoustic coder
+  group: Audio quality
+"encoder:aac:profile":
+  label: AAC profile
+  group: Compatibility
+
+# Opus audio
+"encoder:libopus:vbr":
+  label: Variable bitrate mode
+  group: Rate control
+"encoder:libopus:application":
+  label: Audio optimization (voice/music)
+  group: Audio quality
+"encoder:libopus:compression_level":
+  label: Encoding effort (0-10)
+  group: Audio quality
+
+# MP3 (LAME)
+"encoder:libmp3lame:compression_level":
+  label: Encoding effort (0-9)
+  group: Audio quality
+"encoder:libmp3lame:joint_stereo":
+  label: Joint stereo coding
+  group: Audio quality
+
+# MP4 container
+"muxer:mp4:movflags":
+  label: MP4 layout flags
+  group: Container
+"muxer:mp4:brand":
+  label: Major compatibility brand
+  group: Container
+"muxer:mp4:frag_duration":
+  label: Fragment duration (streaming)
+  group: Streaming
+
+# Matroska (MKV) container
 "muxer:matroska:attachment":
   label: Attachments
+  group: Container
+"muxer:matroska:live":
+  label: Live streaming mode
+  group: Streaming
+"muxer:matroska:cues_to_front":
+  label: Seek index at start
+  group: Container
+"muxer:matroska:reserve_index_space":
+  label: Reserved seek index size
   group: Container

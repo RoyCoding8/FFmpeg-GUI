@@ -12,6 +12,7 @@ CURATED_TYPES = {
     "crf": "int", "cq": "int", "threads": "int", "g": "int", "bf": "int",
     "refs": "int", "ac": "int", "ar": "int",
 }
+METADATA_TAGS = frozenset({"title", "artist", "album", "date", "genre", "track", "comment"})
 
 _JOB_FIELDS = {f.name: f for f in dataclasses.fields(Job)}
 _NON_PLAIN_GLOBALS = frozenset({
@@ -27,7 +28,7 @@ _DISPOSITIONS = frozenset({
 _DISP_VALUE_RE = re.compile(r"[+-]?[A-Za-z0-9_]+(?:[+-][A-Za-z0-9_]+)*")
 _STRUCTURAL_INPUT_FLAGS = frozenset({"-i", "-map", "-filter_complex"})
 _INPUT_INT_FLAGS = frozenset({"-loop"})
-_INPUT_TIME_FLAGS = frozenset({"-ss"})
+_INPUT_TIME_FLAGS = frozenset({"-ss", "-itsoffset"})
 _TIME_RE = re.compile(r"^[+-]?(?:\d+(?::\d+){1,2}(?:\.\d+)?|\d+(?:\.\d+)?(?:ms|us|s)?)$")
 _LEADING_DOT_RE = re.compile(r"^([+-]?)\.(\d+)((?:ms|us|s)?)$")
 _FALSY = frozenset({"", "0", "false", "no", "off"})

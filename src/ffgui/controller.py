@@ -35,6 +35,7 @@ from ffgui.store import delete_preset, fresh_meta, is_truthy, load_presets, save
 from ffgui.ui import icons
 from ffgui.ui.shell import Shell, mark_invalid
 from ffgui.ui.tabs import build_tabs, wrap_scroll
+from ffgui.validate import METADATA_TAGS
 
 _BARE_NEGATIVE_RE = re.compile(r"-\d*\.?\d+")
 _NO_OUTPUT_KINDS = ("codec", "option", "field", "flag", "hwdecode", "input")
@@ -66,10 +67,13 @@ def _apply_volume(doc: QueueDocument, kind: str, row: int, value: str) -> str | 
 
 _EDITS = {
     "codec": lambda c, r, k, v: c.doc.set_codec(r, k, v),
+    "drop_stream": lambda c, r, k, v: c.doc.set_stream_drop(r, k, v),
     "option": lambda c, r, k, v: c._apply_option(r, k, v),
     "field": lambda c, r, k, v: c._apply_field(r, k, v),
     "flag": lambda c, r, k, v: c._apply_flag(r, k, v),
     "filters": lambda c, r, k, v: c.doc.set_filters(r, k, v.split("\n") if v else []),
+    "vfilter": lambda c, r, k, v: c._apply_vfilter(r, k, v),
+    "speed": lambda c, r, k, v: c._apply_speed(r, v),
     "chapters": lambda c, r, k, v: c.doc.set_chapters(r, v),
     "burn": lambda c, r, k, v: c.doc.set_output_field(r, "subtitle_burn_in", v),
     "faststart": lambda c, r, k, v: c.doc.set_faststart(r, v),
@@ -83,6 +87,7 @@ _EDITS = {
     "volume": lambda c, r, k, v: _apply_volume(c.doc, "volume", r, v),
     "loudnorm": lambda c, r, k, v: _apply_volume(c.doc, "loudnorm", r, v),
     "streamtag": lambda c, r, k, v: c._apply_streamtag(r),
+    "streamdisp": lambda c, r, k, v: c._apply_streamdisp(r, v),
 }
 
 
@@ -197,6 +202,8 @@ class Controller(QObject):
             meta = self.tabs["Metadata"]
             meta.stream_spec.setText("")
             meta.stream_lang.setText("")
+            if (disp := getattr(meta, "stream_disposition", None)) is not None:
+                disp.setCurrentIndex(0)
         if not rows:
             self.shell.preview.setPlainText("")
             return
@@ -284,12 +291,59 @@ class Controller(QObject):
             return "enter a stream spec (e.g. v:0) and a language tag"
         return self.doc.set_stream_meta(row, spec, "language", lang)
 
+    def _apply_streamdisp(self, row: int, value: str) -> str | None:
+        spec = self.tabs["Metadata"].stream_spec.text().strip()
+        if not spec:
+            return "enter a stream spec (e.g. v:0) first"
+        return self.doc.set_disposition(row, spec, value)
+
+    def _apply_vfilter(self, row: int, key: str, value: str) -> str | None:
+        current = self.doc.items[row].job.video_filters.filters
+        val = value.strip()
+        if key in ("scale", "crop"):
+            chain = [f for f in current if f != key and not f.startswith(f"{key}=")]
+            if val:
+                chain.append(f"{key}={val}")
+        elif key == "deinterlace":
+            chain = [f for f in current if f != "yadif" and not f.startswith("yadif=")]
+            if is_truthy(val):
+                chain.append("yadif")
+        elif key == "rotate":
+            chain = [f for f in current
+                     if not f.startswith("transpose=") and f not in ("hflip", "vflip")]
+            if val:
+                chain.extend(tok for tok in (t.strip() for t in val.split(",")) if tok)
+        else:
+            return f"unknown video filter {key!r}"
+        return self.doc.set_filters(row, "video_filters", chain)
+
+    def _apply_speed(self, row: int, value: str) -> str | None:
+        raw = value.strip()
+        rate: float | None = None
+        if raw:
+            num = raw[:-1].strip() if raw.lower().endswith("x") else raw
+            try:
+                rate = float(num)
+            except ValueError:
+                return f"speed must be a number between 0.5 and 2.0, got {value!r}"
+            if not 0.5 <= rate <= 2.0:
+                return f"speed must be between 0.5 and 2.0, got {value!r}"
+        job = self.doc.items[row].job
+        vchain = [f for f in job.video_filters.filters if not f.startswith("setpts=")]
+        achain = [f for f in job.audio_filters.filters if not f.startswith("atempo=")]
+        if rate is not None and rate != 1.0:
+            rate_str = f"{rate:g}"
+            vchain.append(f"setpts=PTS/{rate_str}")
+            achain.append(f"atempo={rate_str}")
+        return (self.doc.set_filters(row, "video_filters", vchain)
+                or self.doc.set_filters(row, "audio_filters", achain))
+
     def _apply_option(self, row: int, key: str, value: str) -> str | None:
         scope, _, real = (key if isinstance(key, str) else "").partition(":")
         return self.doc.set_option(row, scope, real, value)
 
     def _apply_field(self, row: int, key: str, value: str) -> str | None:
-        if key in ("title", "comment"):
+        if isinstance(key, str) and key in METADATA_TAGS:
             return self.doc.set_metadata(row, key, value)
         return self.doc.set_output_field(row, key, value)
 

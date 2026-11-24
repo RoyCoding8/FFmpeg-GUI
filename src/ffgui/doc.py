@@ -17,6 +17,7 @@ from ffgui.export.model import contains_hostile
 from ffgui.store import UnparsedRow, fresh_meta, is_truthy, load_queue, save_queue
 from ffgui.validate import (
     CURATED_TYPES as CURATED_TYPES,
+    METADATA_TAGS,
     _INPUT_INT_FLAGS,
     _INPUT_TIME_FLAGS,
     _INT_RE,
@@ -198,7 +199,24 @@ class QueueDocument(QObject):
             setattr(out, STREAM_FIELDS[stream], codec)
             if stream == "subtitle":
                 out.sn_explicit = False
+            elif stream == "video":
+                out.options.pop("vn", None)
+            elif stream == "audio":
+                out.options.pop("an", None)
             return warning
+
+        return self._edit_out(row, _apply)
+
+    def set_stream_drop(self, row: int, flag: str, value: str) -> str | None:
+        if not isinstance(flag, str) or flag not in ("vn", "an"):
+            return f"unknown stream drop {flag!r}"
+
+        def _apply(out: Output) -> None:
+            if is_truthy(_s(value)):
+                out.options[flag] = ""
+                setattr(out, "video_codec" if flag == "vn" else "audio_codec", None)
+            else:
+                out.options.pop(flag, None)
 
         return self._edit_out(row, _apply)
 
@@ -247,7 +265,7 @@ class QueueDocument(QObject):
         return self._edit_out(row, _apply)
 
     def set_metadata(self, row: int, key: str, value: str) -> str | None:
-        if key not in ("title", "comment"):
+        if not isinstance(key, str) or key not in METADATA_TAGS:
             return f"unknown tag {key!r}"
         value, err = _clean(value, key)
         return err or self._edit_out(row, lambda out: _set_or_pop(out.metadata, key, value))
