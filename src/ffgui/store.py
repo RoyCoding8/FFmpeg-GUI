@@ -23,6 +23,7 @@ _META_KEYS = ("name", "enabled", "notes", "source_hash")
 _META_DEFAULTS = {"name": "", "enabled": True, "notes": "", "source_hash": ""}
 _QUEUE_LOCK = threading.RLock()
 TRUTHY = frozenset({"1", "true", "yes", "on"})
+_READ_FAILED = object()
 
 
 def gui_dirs() -> tuple[Path, Path]:
@@ -69,18 +70,18 @@ def _queue_lock(dir):
     return interprocess_lock(_queue_path(dir).with_name("queue.json.lock"))
 
 
-def _read_json(path: Path) -> object | None:
+def _read_json(path: Path) -> object:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError, UnicodeDecodeError):
         quarantine_or_raise(path)
-        return None
+        return _READ_FAILED
 
 
 def _read_queue_raw(dir) -> list[dict]:
     path = _queue_path(dir)
     sweep_stale_temps(path)
-    if not path.is_file() or (raw := _read_json(path)) is None:
+    if not path.is_file() or (raw := _read_json(path)) is _READ_FAILED:
         return []
     if (isinstance(raw, dict) and set(raw) == {"schema", "rows"}
             and is_schema_stamp(raw["schema"]) and raw["schema"] == GUI_SCHEMA
@@ -191,7 +192,7 @@ def _presets_dict(raw: object) -> dict | None:
 def load_presets(dir=None) -> dict[str, tuple[Job, dict]]:
     path = _presets_path(dir)
     sweep_stale_temps(path)
-    if not path.is_file() or (raw := _read_json(path)) is None:
+    if not path.is_file() or (raw := _read_json(path)) is _READ_FAILED:
         return {}
     presets = _presets_dict(raw)
     if presets is None:
@@ -220,10 +221,10 @@ def delete_preset(name: str, dir=None) -> None:
 def _write_presets(mutate, dir) -> None:
     path = _presets_path(dir)
     with interprocess_lock(path.with_name("presets.json.lock")):
-        raw = _read_json(path) if path.is_file() else None
+        raw = _read_json(path) if path.is_file() else _READ_FAILED
         presets = _presets_dict(raw)
         if presets is None:
-            if raw is not None:
+            if raw is not _READ_FAILED:
                 quarantine_or_raise(path)
             presets = {}
         mutate(presets)

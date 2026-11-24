@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import inspect
 import sys
 from pathlib import Path
 
@@ -21,6 +22,11 @@ _ORG = "ffgui"
 class _Probe(QThread):
     done = Signal(object)
     failed = Signal(str)
+
+    def __init__(self, parent=None, *, gen: int = 0, target: str = "") -> None:
+        super().__init__(parent)
+        self.gen = gen
+        self.target = target
 
     def run(self) -> None:
         try:
@@ -48,12 +54,19 @@ def _restore_state(settings: QSettings, shell: Shell) -> None:
     shell.tabs.setCurrentIndex(tab)
 
 
-def _launch_probe(shell: Shell, on_done, on_failed) -> _Probe:
+def _launch_probe(
+    shell: Shell,
+    on_done,
+    on_failed,
+    *,
+    gen: int = 0,
+    target: str = "",
+) -> _Probe:
     # Parented to shell so a running QThread is not GC'd mid-run (SIGABRT).
     for child in shell.findChildren(_Probe):
-        if child.isRunning():
+        if child.isRunning() and child.gen == gen and child.target == target:
             return child
-    probe = _Probe(shell)
+    probe = _Probe(shell, gen=gen, target=target)
     probe.done.connect(on_done)
     probe.failed.connect(on_failed)
     probe.finished.connect(probe.deleteLater)
@@ -73,24 +86,38 @@ def _boot(app: QApplication, shell: Shell, settings: QSettings, cap,
 
 
 def _wire_probe(app: QApplication, shell: Shell, settings: QSettings, job_files: list[str]) -> None:
-    cancelled: list[bool] = []
+    state: dict[str, object] = {"gen": 0, "booted": False, "target": ""}
 
     def _probe_failed(message: str) -> None:
         shell.set_state("no-ffmpeg")
         shell.no_ffmpeg.status.setText(message)
 
     def _cancel() -> None:
-        cancelled.append(True)
+        state["gen"] = int(state["gen"]) + 1
         _probe_failed("probe cancelled")
 
-    def start_probe() -> None:
-        cancelled.clear()
+    def start_probe(target: str = "") -> None:
+        gen = int(state["gen"]) + 1
+        state["gen"] = gen
+        state["target"] = target
         shell.set_state("loading")
-        _launch_probe(
-            shell,
-            lambda cap: None if cancelled else _boot(app, shell, settings, cap, job_files),
-            lambda message: None if cancelled else _probe_failed(message),
-        )
+
+        def _on_done(cap) -> None:
+            if gen != state["gen"] or state["booted"]:
+                return
+            state["booted"] = True
+            _boot(app, shell, settings, cap, job_files)
+
+        def _on_failed(message: str) -> None:
+            if gen != state["gen"] or state["booted"]:
+                return
+            _probe_failed(message)
+
+        params = inspect.signature(_launch_probe).parameters
+        if "gen" in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+            _launch_probe(shell, _on_done, _on_failed, gen=gen, target=target)
+        else:
+            _launch_probe(shell, _on_done, _on_failed)
 
     def locate(path: str) -> None:
         if not path:
@@ -98,7 +125,7 @@ def _wire_probe(app: QApplication, shell: Shell, settings: QSettings, job_files:
         if shell.no_ffmpeg.remember.isChecked():
             settings.setValue("ffmpeg_path", path)
         aim_ffmpeg(path)
-        start_probe()
+        start_probe(path)
 
     def browse() -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -109,7 +136,7 @@ def _wire_probe(app: QApplication, shell: Shell, settings: QSettings, job_files:
         explicit, found = locate_ffmpeg(settings)
         if found:
             aim_ffmpeg(explicit)
-            start_probe()
+            start_probe(explicit or "")
         elif missing_msg:
             _probe_failed(missing_msg)
         else:

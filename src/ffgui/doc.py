@@ -190,19 +190,29 @@ class QueueDocument(QObject):
                 setattr(out, STREAM_FIELDS[stream], None)
                 if stream == "subtitle":
                     out.sn_explicit = False
+                    out.options.pop("sn", None)
                 return None
             if stream == "subtitle" and codec == "none":
                 out.subtitle_codec = None
                 out.sn_explicit = True
+                out.options["sn"] = ""
                 return None
             warning = self._codec_warning(out, stream, codec)
             setattr(out, STREAM_FIELDS[stream], codec)
             if stream == "subtitle":
                 out.sn_explicit = False
+                out.options.pop("sn", None)
             elif stream == "video":
                 out.options.pop("vn", None)
+                if codec == "copy":
+                    self.item(row).job.video_filters = FilterChain()
+                    out.video_filters = FilterChain()
+                    out.subtitle_burn_in = ""
             elif stream == "audio":
                 out.options.pop("an", None)
+                if codec == "copy":
+                    self.item(row).job.audio_filters = FilterChain()
+                    out.audio_filters = FilterChain()
             return warning
 
         return self._edit_out(row, _apply)
@@ -257,8 +267,25 @@ class QueueDocument(QObject):
                 if key in ("start", "duration", "end") and value and out.video_codec == "copy"
                 else None
             )
-            if key == "container" and value:
-                out.options.pop("f", None)
+            if value:
+                if key == "container":
+                    out.options.pop("f", None)
+                    out.segment_enabled = False
+                    out.tee_spec = ""
+                elif key == "cover_art" and not out.mappings:
+                    inp = self._inp(row)
+                    typed = [
+                        f"0:{s.spec}"
+                        for s in (inp.streams if inp else [])
+                        if s.mapped and s.spec[:1] in ("v", "a", "s")
+                    ]
+                    out.mappings = typed or ["0:v?", "0:a?"]
+                elif key == "duration":
+                    out.end = None
+                elif key == "end":
+                    out.duration = None
+                elif key == "subtitle_burn_in" and out.video_codec == "copy":
+                    out.video_codec = None
             setattr(out, key, value if key == "subtitle_burn_in" else value or None)
             return warning
 
@@ -313,6 +340,8 @@ class QueueDocument(QObject):
             out.segment_enabled = is_truthy(value)
             if out.segment_enabled:
                 out.segment_format = out.container or Path(out.path).suffix.lstrip(".").lower() or "mp4"
+                out.container = None
+                out.tee_spec = ""
 
         return self._edit_out(row, _apply)
 
@@ -327,8 +356,11 @@ class QueueDocument(QObject):
         def _apply(_out: Output) -> None:
             job = self.item(row).job
             setattr(job, stream, FilterChain(filters=list(exprs)) if exprs else FilterChain())
+            codec_attr = "video_codec" if stream == "video_filters" else "audio_codec"
             for out in job.outputs:
                 setattr(out, stream, FilterChain())
+                if exprs and getattr(out, codec_attr) == "copy":
+                    setattr(out, codec_attr, None)
 
         return self._edit_out(row, _apply)
 
@@ -449,7 +481,16 @@ class QueueDocument(QObject):
 
     def set_tee(self, row: int, value: str) -> str | None:
         value, err = _clean(value, "tee")
-        return err or self._edit_out(row, lambda out: setattr(out, "tee_spec", value))
+        if err:
+            return err
+
+        def _apply(out: Output) -> None:
+            out.tee_spec = value
+            if value:
+                out.segment_enabled = False
+                out.container = None
+
+        return self._edit_out(row, _apply)
 
     def argv(self, row: int) -> list[str]:
         return build(self.item(row).job)

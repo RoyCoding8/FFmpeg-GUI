@@ -45,4 +45,5 @@ dev = [
     "pytest-cov>=7.1.0",
     "pyyaml>=6.0.3",
     "ruff>=0.16.2",
+    "z3-solver>=4.12",
 ]
